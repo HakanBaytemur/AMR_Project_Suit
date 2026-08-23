@@ -20,7 +20,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "DWG TrueView Lite";
+        Text = "DWG TrueView Lite V2";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(960, 600);
         Size = new Size(1440, 900);
@@ -167,7 +167,7 @@ public sealed class MainForm : Form
             cancellationToken.ThrowIfCancellationRequested();
             _viewport.LoadDrawing(drawing);
             PopulateLayers(drawing);
-            Text = $"DWG TrueView Lite — {Path.GetFileName(path)}";
+            Text = $"DWG TrueView Lite V2 — {Path.GetFileName(path)}";
             _statusText.Text =
                 $"{drawing.SegmentCount:N0} segments  |  "
                 + $"{drawing.VertexBytes / 1024d / 1024d:N1} MiB GPU vertices  |  "

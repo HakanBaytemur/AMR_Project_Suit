@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -12,6 +12,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DwgTrueView.Core\DwgTrueView.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DwgTrueView.Tests" />
   </ItemGroup>
 
 </Project>

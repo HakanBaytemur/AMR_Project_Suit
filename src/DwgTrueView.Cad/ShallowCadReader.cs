@@ -16,9 +16,11 @@ public sealed record CadReadOptions
 }
 
 /// <summary>
-/// Display-only CAD reader. It projects supported entities into one contiguous
-/// line-list buffer and intentionally never traverses XData, constraints,
-/// actions, dimensions, text, hatches, or application XRecords.
+/// Display-only CAD reader. It tessellates supported 2D entities into one
+/// contiguous line-list GPU buffer. Invisible entities, frozen/off layers, and
+/// dynamic-block visibility masters stay out of the drawn set. XData,
+/// constraints, actions, dimension internals, and application XRecords are
+/// never walked.
 /// </summary>
 public sealed class ShallowCadReader
 {
