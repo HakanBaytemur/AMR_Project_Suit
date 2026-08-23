@@ -150,15 +150,25 @@ internal static class CurveTessellator
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        int count = points.Count;
-        if (count < 2)
+        Vector3? first = null;
+        Vector3? previous = null;
+        foreach (Vector3 point in points)
         {
-            return;
+            if (!IsFinite(point))
+            {
+                previous = null;
+                continue;
+            }
+            first ??= point;
+            if (previous is Vector3 start)
+            {
+                Add(destination, start, point, layerId, color);
+            }
+            previous = point;
         }
-        int segments = closed ? count : count - 1;
-        for (int index = 0; index < segments; index++)
+        if (closed && first is Vector3 closeStart && previous is Vector3 closeEnd)
         {
-            Add(destination, points[index], points[(index + 1) % count], layerId, color);
+            Add(destination, closeEnd, closeStart, layerId, color);
         }
     }
 

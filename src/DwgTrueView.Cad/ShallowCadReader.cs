@@ -289,22 +289,25 @@ public sealed class ShallowCadReader
         LayerState layer = LayerAt(layerId, layers);
         int blockArgb = CadColorResolver.Resolve(insertColor, layer.Color, parentBlockColor);
         CadColorValue blockColor = CadColorValue.Rgb(blockArgb & 0xFFFFFF);
-        Vector3 basePoint = resolved!.BlockEntity is null
-            ? Vector3.Zero
-            : CadMath.ToVector(resolved.BlockEntity.BasePoint);
+        Vector3 basePoint = CadMath.BlockBasePoint(resolved);
         int rows = Math.Max(1, (int)insert.RowCount);
         int columns = Math.Max(1, (int)insert.ColumnCount);
         for (int row = 0; row < rows; row++)
         {
             for (int column = 0; column < columns; column++)
             {
-                Matrix4x4 transform = CadMath.InsertTransform(
+                if (!CadMath.TryInsertTransform(
                         insert,
                         basePoint,
                         new Vector2(
                             column * (float)insert.ColumnSpacing,
-                            row * (float)insert.RowSpacing))
-                    * parentTransform;
+                            row * (float)insert.RowSpacing),
+                        out Matrix4x4 local))
+                {
+                    destination.Skipped++;
+                    continue;
+                }
+                Matrix4x4 transform = local * parentTransform;
                 FlattenTemplate(
                     blockId,
                     layerId,
@@ -420,25 +423,28 @@ public sealed class ShallowCadReader
         int layerId,
         List<NestedInsert> destination)
     {
-        Vector3 basePoint = block.BlockEntity is null
-            ? Vector3.Zero
-            : CadMath.ToVector(block.BlockEntity.BasePoint);
+        Vector3 basePoint = CadMath.BlockBasePoint(block);
         int rows = Math.Max(1, (int)insert.RowCount);
         int columns = Math.Max(1, (int)insert.ColumnCount);
         for (int row = 0; row < rows; row++)
         {
             for (int column = 0; column < columns; column++)
             {
-                destination.Add(new NestedInsert(
-                    blockId,
-                    layerId,
-                    CadColorResolver.FromCadColor(insert.Color),
-                    CadMath.InsertTransform(
+                if (!CadMath.TryInsertTransform(
                         insert,
                         basePoint,
                         new Vector2(
                             column * (float)insert.ColumnSpacing,
-                            row * (float)insert.RowSpacing))));
+                            row * (float)insert.RowSpacing),
+                        out Matrix4x4 transform))
+                {
+                    continue;
+                }
+                destination.Add(new NestedInsert(
+                    blockId,
+                    layerId,
+                    CadColorResolver.FromCadColor(insert.Color),
+                    transform));
             }
         }
     }

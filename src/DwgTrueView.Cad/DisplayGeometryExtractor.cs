@@ -28,43 +28,48 @@ internal static class DisplayGeometryExtractor
         switch (entity)
         {
             case ACadSharp.Entities.Line line:
-                Add(
-                    destination,
-                    CadMath.ToVector(line.StartPoint),
-                    CadMath.ToVector(line.EndPoint),
-                    layerId,
-                    color);
+                if (CadMath.TryWorldPoint(line.StartPoint, out Vector3 lineStart)
+                    && CadMath.TryWorldPoint(line.EndPoint, out Vector3 lineEnd))
+                {
+                    Add(destination, lineStart, lineEnd, layerId, color);
+                }
                 return true;
             case LwPolyline polyline:
                 AppendLwPolyline(polyline, layerId, color, destination);
                 return true;
             case Polyline2D polyline:
-                AppendHeavyPolyline(polyline, layerId, color, destination);
+                AppendPolyline2D(polyline, layerId, color, destination);
                 return true;
             case Polyline3D polyline:
-                AppendHeavyPolyline(polyline, layerId, color, destination);
+                AppendPolyline3D(polyline, layerId, color, destination);
                 return true;
             case Arc arc:
-                AppendArc(
-                    CadMath.ToVector(arc.Center),
-                    CadMath.ToVector(arc.Normal),
-                    (float)arc.Radius,
-                    (float)arc.StartAngle,
-                    PositiveSweep((float)arc.StartAngle, (float)arc.EndAngle),
-                    layerId,
-                    color,
-                    destination);
+                if (CadMath.TryOcsToWcs(arc.Center, arc.Normal, out Vector3 arcCenter))
+                {
+                    AppendArc(
+                        arcCenter,
+                        CadMath.UsableNormal(arc.Normal),
+                        (float)arc.Radius,
+                        (float)arc.StartAngle,
+                        PositiveSweep((float)arc.StartAngle, (float)arc.EndAngle),
+                        layerId,
+                        color,
+                        destination);
+                }
                 return true;
             case Circle circle:
-                AppendArc(
-                    CadMath.ToVector(circle.Center),
-                    CadMath.ToVector(circle.Normal),
-                    (float)circle.Radius,
-                    0,
-                    TwoPi,
-                    layerId,
-                    color,
-                    destination);
+                if (CadMath.TryOcsToWcs(circle.Center, circle.Normal, out Vector3 circleCenter))
+                {
+                    AppendArc(
+                        circleCenter,
+                        CadMath.UsableNormal(circle.Normal),
+                        (float)circle.Radius,
+                        0,
+                        TwoPi,
+                        layerId,
+                        color,
+                        destination);
+                }
                 return true;
             case Ellipse ellipse:
                 AppendEllipse(ellipse, layerId, color, destination);
@@ -97,20 +102,18 @@ internal static class DisplayGeometryExtractor
         {
             return;
         }
+        double elevation = polyline.Elevation;
+        Vector3 normal = CadMath.UsableNormal(polyline.Normal);
         int segmentCount = polyline.IsClosed ? count : count - 1;
-        float elevation = (float)polyline.Elevation;
         for (int index = 0; index < segmentCount; index++)
         {
             LwPolyline.Vertex current = polyline.Vertices[index];
             LwPolyline.Vertex next = polyline.Vertices[(index + 1) % count];
-            Vector3 start = new(
-                (float)current.Location.X,
-                (float)current.Location.Y,
-                elevation);
-            Vector3 end = new(
-                (float)next.Location.X,
-                (float)next.Location.Y,
-                elevation);
+            if (!TryLwVertex(current, elevation, polyline.Normal, out Vector3 start)
+                || !TryLwVertex(next, elevation, polyline.Normal, out Vector3 end))
+            {
+                continue;
+            }
             float bulge = (float)current.Bulge;
             if (MathF.Abs(bulge) <= BulgeTolerance)
             {
@@ -118,27 +121,57 @@ internal static class DisplayGeometryExtractor
             }
             else
             {
-                AppendBulge(start, end, bulge, layerId, color, destination);
+                AppendBulge(
+                    new Vector3(
+                        (float)current.Location.X,
+                        (float)current.Location.Y,
+                        (float)elevation),
+                    new Vector3(
+                        (float)next.Location.X,
+                        (float)next.Location.Y,
+                        (float)elevation),
+                    bulge,
+                    normal,
+                    layerId,
+                    color,
+                    destination);
             }
         }
     }
 
+    private static bool TryLwVertex(
+        LwPolyline.Vertex vertex,
+        double elevation,
+        CSMath.XYZ normal,
+        out Vector3 world) =>
+        CadMath.TryOcsToWcs(vertex.Location.X, vertex.Location.Y, elevation, normal, out world);
+
     private static void AppendBulge(
-        Vector3 start,
-        Vector3 end,
+        Vector3 startOcs,
+        Vector3 endOcs,
         float bulge,
+        Vector3 normal,
         int layerId,
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        Vector2 p0 = new(start.X, start.Y);
-        Vector2 p1 = new(end.X, end.Y);
+        if (!CadMath.IsUsable(startOcs) || !CadMath.IsUsable(endOcs))
+        {
+            return;
+        }
+        Vector2 p0 = new(startOcs.X, startOcs.Y);
+        Vector2 p1 = new(endOcs.X, endOcs.Y);
         Vector2 chord = p1 - p0;
         float length = chord.Length();
         float sweep = 4 * MathF.Atan(bulge);
         if (length <= float.Epsilon || MathF.Abs(sweep) <= BulgeTolerance)
         {
-            Add(destination, start, end, layerId, color);
+            Add(
+                destination,
+                CadMath.OcsToWcs(startOcs, normal),
+                CadMath.OcsToWcs(endOcs, normal),
+                layerId,
+                color);
             return;
         }
         Vector2 midpoint = (p0 + p1) * 0.5f;
@@ -146,9 +179,10 @@ internal static class DisplayGeometryExtractor
         Vector2 center = midpoint + left * (length / (2 * MathF.Tan(sweep / 2)));
         float radius = Vector2.Distance(center, p0);
         float startAngle = MathF.Atan2(p0.Y - center.Y, p0.X - center.X);
+        Vector3 worldCenter = CadMath.OcsToWcs(new Vector3(center, startOcs.Z), normal);
         AppendArc(
-            new Vector3(center, start.Z),
-            Vector3.UnitZ,
+            worldCenter,
+            normal,
             radius,
             startAngle,
             sweep,
@@ -200,12 +234,69 @@ internal static class DisplayGeometryExtractor
         + axisX * (MathF.Cos(angle) * radius)
         + axisY * (MathF.Sin(angle) * radius);
 
-    private static void AppendHeavyPolyline<TVertex>(
-        Polyline<TVertex> polyline,
+    private static void AppendPolyline2D(
+        Polyline2D polyline,
         int layerId,
         CadColorValue color,
         List<LocalSegment> destination)
-        where TVertex : Vertex
+    {
+        int count = polyline.Vertices.Count;
+        if (count < 2)
+        {
+            return;
+        }
+        double elevation = polyline.Elevation;
+        Vector3 normal = CadMath.UsableNormal(polyline.Normal);
+        int segmentCount = polyline.IsClosed ? count : count - 1;
+        for (int index = 0; index < segmentCount; index++)
+        {
+            Vertex2D current = polyline.Vertices[index];
+            Vertex2D next = polyline.Vertices[(index + 1) % count];
+            if (!CadMath.TryOcsToWcs(
+                    current.Location.X,
+                    current.Location.Y,
+                    elevation,
+                    polyline.Normal,
+                    out Vector3 start)
+                || !CadMath.TryOcsToWcs(
+                    next.Location.X,
+                    next.Location.Y,
+                    elevation,
+                    polyline.Normal,
+                    out Vector3 end))
+            {
+                continue;
+            }
+            float bulge = (float)current.Bulge;
+            if (MathF.Abs(bulge) <= BulgeTolerance)
+            {
+                Add(destination, start, end, layerId, color);
+            }
+            else
+            {
+                AppendBulge(
+                    new Vector3(
+                        (float)current.Location.X,
+                        (float)current.Location.Y,
+                        (float)elevation),
+                    new Vector3(
+                        (float)next.Location.X,
+                        (float)next.Location.Y,
+                        (float)elevation),
+                    bulge,
+                    normal,
+                    layerId,
+                    color,
+                    destination);
+            }
+        }
+    }
+
+    private static void AppendPolyline3D(
+        Polyline3D polyline,
+        int layerId,
+        CadColorValue color,
+        List<LocalSegment> destination)
     {
         int count = polyline.Vertices.Count;
         if (count < 2)
@@ -215,19 +306,14 @@ internal static class DisplayGeometryExtractor
         int segmentCount = polyline.IsClosed ? count : count - 1;
         for (int index = 0; index < segmentCount; index++)
         {
-            TVertex current = polyline.Vertices[index];
-            TVertex next = polyline.Vertices[(index + 1) % count];
-            Vector3 start = CadMath.ToVector(current.Location);
-            Vector3 end = CadMath.ToVector(next.Location);
-            float bulge = (float)current.Bulge;
-            if (MathF.Abs(bulge) <= BulgeTolerance)
+            Vertex3D current = polyline.Vertices[index];
+            Vertex3D next = polyline.Vertices[(index + 1) % count];
+            if (!CadMath.TryWorldPoint(current.Location, out Vector3 start)
+                || !CadMath.TryWorldPoint(next.Location, out Vector3 end))
             {
-                Add(destination, start, end, layerId, color);
+                continue;
             }
-            else
-            {
-                AppendBulge(start, end, bulge, layerId, color, destination);
-            }
+            Add(destination, start, end, layerId, color);
         }
     }
 
@@ -344,12 +430,11 @@ internal static class DisplayGeometryExtractor
                 switch (edge)
                 {
                     case Hatch.BoundaryPath.Line line:
-                        Add(
-                            destination,
-                            FromOcs(line.Start, origin, axisX, axisY),
-                            FromOcs(line.End, origin, axisX, axisY),
-                            layerId,
-                            color);
+                        if (TryHatchPoint(line.Start, origin, axisX, axisY, out Vector3 hatchStart)
+                            && TryHatchPoint(line.End, origin, axisX, axisY, out Vector3 hatchEnd))
+                        {
+                            Add(destination, hatchStart, hatchEnd, layerId, color);
+                        }
                         break;
                     case Hatch.BoundaryPath.Polyline polyline:
                         AppendHatchPolyline(
@@ -409,8 +494,21 @@ internal static class DisplayGeometryExtractor
         {
             CSMath.XYZ current = polyline.Vertices[index];
             CSMath.XYZ next = polyline.Vertices[(index + 1) % count];
-            Vector3 start = FromOcs(new CSMath.XYZ(current.X, current.Y, 0), origin, axisX, axisY);
-            Vector3 end = FromOcs(new CSMath.XYZ(next.X, next.Y, 0), origin, axisX, axisY);
+            if (!TryHatchPoint(
+                    new CSMath.XYZ(current.X, current.Y, 0),
+                    origin,
+                    axisX,
+                    axisY,
+                    out Vector3 start)
+                || !TryHatchPoint(
+                    new CSMath.XYZ(next.X, next.Y, 0),
+                    origin,
+                    axisX,
+                    axisY,
+                    out Vector3 end))
+            {
+                continue;
+            }
             float bulge = bulges.Count == count
                 ? (float)bulges[index]
                 : (float)current.Z;
@@ -420,7 +518,14 @@ internal static class DisplayGeometryExtractor
             }
             else
             {
-                AppendBulge(start, end, bulge, layerId, color, destination);
+                AppendBulge(
+                    new Vector3((float)current.X, (float)current.Y, 0),
+                    new Vector3((float)next.X, (float)next.Y, 0),
+                    bulge,
+                    Vector3.Normalize(Vector3.Cross(axisX, axisY)),
+                    layerId,
+                    color,
+                    destination);
             }
         }
     }
@@ -434,13 +539,17 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
+        if (!TryHatchPoint(arc.Center, origin, axisX, axisY, out Vector3 center))
+        {
+            return;
+        }
         float start = (float)arc.StartAngle;
         float end = (float)arc.EndAngle;
         float sweep = arc.CounterClockWise
             ? PositiveSweep(start, end)
             : -PositiveSweep(end, start);
         AppendArc(
-            FromOcs(arc.Center, origin, axisX, axisY),
+            center,
             Vector3.Normalize(Vector3.Cross(axisX, axisY)),
             (float)arc.Radius,
             start,
@@ -459,7 +568,10 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        Vector3 center = FromOcs(ellipse.Center, origin, axisX, axisY);
+        if (!TryHatchPoint(ellipse.Center, origin, axisX, axisY, out Vector3 center))
+        {
+            return;
+        }
         Vector3 major = axisX * (float)ellipse.MajorAxisEndPoint.X
             + axisY * (float)ellipse.MajorAxisEndPoint.Y;
         if (major.LengthSquared() <= 1e-12f)
@@ -517,7 +629,15 @@ internal static class DisplayGeometryExtractor
             var points = new List<Vector3>(samples.Count);
             foreach (CSMath.XYZ sample in samples)
             {
-                points.Add(FromOcs(new CSMath.XYZ(sample.X, sample.Y, 0), origin, axisX, axisY));
+                if (TryHatchPoint(
+                        new CSMath.XYZ(sample.X, sample.Y, 0),
+                        origin,
+                        axisX,
+                        axisY,
+                        out Vector3 world))
+                {
+                    points.Add(world);
+                }
             }
             CurveTessellator.AppendChain(
                 points,
@@ -532,7 +652,16 @@ internal static class DisplayGeometryExtractor
         var weights = new List<double>(spline.ControlPoints.Count);
         foreach (CSMath.XYZ control in spline.ControlPoints)
         {
-            controls.Add(FromOcs(new CSMath.XYZ(control.X, control.Y, 0), origin, axisX, axisY));
+            if (!TryHatchPoint(
+                    new CSMath.XYZ(control.X, control.Y, 0),
+                    origin,
+                    axisX,
+                    axisY,
+                    out Vector3 world))
+            {
+                continue;
+            }
+            controls.Add(world);
             weights.Add(control.Z > 0 ? control.Z : 1);
         }
         if (controls.Count >= 2)
@@ -563,12 +692,21 @@ internal static class DisplayGeometryExtractor
         {
             return;
         }
+        if (!CadMath.TryOcsToWcs(text.InsertPoint, text.Normal, out Vector3 insert))
+        {
+            return;
+        }
         bool useAlignment = text.HorizontalAlignment != TextHorizontalAlignment.Left
             || text.VerticalAlignment != TextVerticalAlignmentType.Baseline;
-        Vector3 origin = CadMath.ToVector(
-            useAlignment ? text.AlignmentPoint : text.InsertPoint);
+        Vector3 origin = insert;
+        if (useAlignment
+            && CadMath.TryOcsToWcs(text.AlignmentPoint, text.Normal, out Vector3 aligned)
+            && CadMath.PreferExplicitPoint(aligned, insert))
+        {
+            origin = aligned;
+        }
         CreateTextAxes(
-            CadMath.ToVector(text.Normal),
+            CadMath.UsableNormal(text.Normal),
             (float)text.Rotation,
             out Vector3 axisX,
             out Vector3 axisY);
@@ -620,9 +758,12 @@ internal static class DisplayGeometryExtractor
             }
             lines = [plain];
         }
-        Vector3 origin = CadMath.ToVector(mtext.InsertPoint);
+        if (!CadMath.TryOcsToWcs(mtext.InsertPoint, mtext.Normal, out Vector3 origin))
+        {
+            return;
+        }
         CreateTextAxes(
-            CadMath.ToVector(mtext.Normal),
+            CadMath.UsableNormal(mtext.Normal),
             (float)mtext.Rotation,
             out Vector3 axisX,
             out Vector3 axisY);
@@ -714,7 +855,15 @@ internal static class DisplayGeometryExtractor
         Vector3? previous = null;
         foreach (CSMath.XYZ point in spline.ControlPoints)
         {
-            Vector3 current = FromOcs(new CSMath.XYZ(point.X, point.Y, 0), origin, axisX, axisY);
+            if (!TryHatchPoint(
+                    new CSMath.XYZ(point.X, point.Y, 0),
+                    origin,
+                    axisX,
+                    axisY,
+                    out Vector3 current))
+            {
+                continue;
+            }
             if (previous is Vector3 last)
             {
                 length += Vector3.Distance(last, current);
@@ -729,7 +878,10 @@ internal static class DisplayGeometryExtractor
         var result = new List<Vector3>();
         foreach (CSMath.XYZ point in points)
         {
-            result.Add(CadMath.ToVector(point));
+            if (CadMath.TryWorldPoint(point, out Vector3 vector))
+            {
+                result.Add(vector);
+            }
         }
         return result;
     }
@@ -744,23 +896,37 @@ internal static class DisplayGeometryExtractor
         return result;
     }
 
-    private static Vector3 FromOcs(
+    private static bool TryHatchPoint(
         CSMath.XY point,
         Vector3 origin,
         Vector3 axisX,
-        Vector3 axisY) =>
-        origin
-        + axisX * (float)point.X
-        + axisY * (float)point.Y;
+        Vector3 axisY,
+        out Vector3 world)
+    {
+        world = default;
+        if (!CadMath.IsUsable(point.X, point.Y, 0))
+        {
+            return false;
+        }
+        world = origin + axisX * (float)point.X + axisY * (float)point.Y;
+        return CadMath.IsUsable(world);
+    }
 
-    private static Vector3 FromOcs(
+    private static bool TryHatchPoint(
         CSMath.XYZ point,
         Vector3 origin,
         Vector3 axisX,
-        Vector3 axisY) =>
-        origin
-        + axisX * (float)point.X
-        + axisY * (float)point.Y;
+        Vector3 axisY,
+        out Vector3 world)
+    {
+        world = default;
+        if (!CadMath.IsUsable(point.X, point.Y, 0))
+        {
+            return false;
+        }
+        world = origin + axisX * (float)point.X + axisY * (float)point.Y;
+        return CadMath.IsUsable(world);
+    }
 
     private static void Add(
         List<LocalSegment> destination,
@@ -769,16 +935,11 @@ internal static class DisplayGeometryExtractor
         int layerId,
         CadColorValue color)
     {
-        if (IsFinite(start) && IsFinite(end) && start != end)
+        if (CadMath.IsUsable(start) && CadMath.IsUsable(end) && start != end)
         {
             destination.Add(new LocalSegment(start, end, layerId, color));
         }
     }
-
-    private static bool IsFinite(Vector3 point) =>
-        float.IsFinite(point.X)
-        && float.IsFinite(point.Y)
-        && float.IsFinite(point.Z);
 
     private static float PositiveSweep(float start, float end)
     {

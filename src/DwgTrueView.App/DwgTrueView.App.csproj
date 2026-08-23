@@ -12,6 +12,20 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <DesktopExeName>DWG TrueView Lite V2.exe</DesktopExeName>
   </PropertyGroup>
+
+  <Target Name="CopyPublishedExeToDesktop" AfterTargets="Publish" Condition="'$(OS)' == 'Windows_NT'">
+    <PropertyGroup>
+      <_PublishedExe>$(PublishDir)$(AssemblyName).exe</_PublishedExe>
+      <_DesktopExe>$(USERPROFILE)\Desktop\$(DesktopExeName)</_DesktopExe>
+    </PropertyGroup>
+    <Copy
+      SourceFiles="$(_PublishedExe)"
+      DestinationFiles="$(_DesktopExe)"
+      OverwriteReadOnlyFiles="true"
+      Condition="Exists('$(_PublishedExe)')" />
+    <Message Importance="high" Text="Copied $(_PublishedExe) to $(_DesktopExe)" Condition="Exists('$(_PublishedExe)')" />
+  </Target>
 
 </Project>
