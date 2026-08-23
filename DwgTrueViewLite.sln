@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{9B6C241E-6A7B-452E-908C-EEBE583DD836}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DwgTrueView.Core", "src\DwgTrueView.Core\DwgTrueView.Core.csproj", "{83F1EF25-A39E-4043-88D0-ABD80263FDF4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DwgTrueView.Cad", "src\DwgTrueView.Cad\DwgTrueView.Cad.csproj", "{229EF564-D7AA-4270-8635-DD025A2B87E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DwgTrueView.Rendering.DirectX", "src\DwgTrueView.Rendering.DirectX\DwgTrueView.Rendering.DirectX.csproj", "{E533BCF2-7C1D-47E5-8FE8-58CB36904808}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DwgTrueView.App", "src\DwgTrueView.App\DwgTrueView.App.csproj", "{8EB8DFE6-37B0-4CE6-B9F9-FAB982F52C07}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests-dotnet", "tests-dotnet", "{04E9E1DF-0B9F-4F28-B6C5-461464C3FFD1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DwgTrueView.Tests", "tests-dotnet\DwgTrueView.Tests\DwgTrueView.Tests.csproj", "{388411B7-FC12-438A-BC16-0CE6CD193DAA}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{83F1EF25-A39E-4043-88D0-ABD80263FDF4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{83F1EF25-A39E-4043-88D0-ABD80263FDF4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{83F1EF25-A39E-4043-88D0-ABD80263FDF4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{83F1EF25-A39E-4043-88D0-ABD80263FDF4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{229EF564-D7AA-4270-8635-DD025A2B87E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{229EF564-D7AA-4270-8635-DD025A2B87E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{229EF564-D7AA-4270-8635-DD025A2B87E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{229EF564-D7AA-4270-8635-DD025A2B87E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E533BCF2-7C1D-47E5-8FE8-58CB36904808}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E533BCF2-7C1D-47E5-8FE8-58CB36904808}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E533BCF2-7C1D-47E5-8FE8-58CB36904808}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E533BCF2-7C1D-47E5-8FE8-58CB36904808}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8EB8DFE6-37B0-4CE6-B9F9-FAB982F52C07}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8EB8DFE6-37B0-4CE6-B9F9-FAB982F52C07}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8EB8DFE6-37B0-4CE6-B9F9-FAB982F52C07}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8EB8DFE6-37B0-4CE6-B9F9-FAB982F52C07}.Release|Any CPU.Build.0 = Release|Any CPU
+		{388411B7-FC12-438A-BC16-0CE6CD193DAA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{388411B7-FC12-438A-BC16-0CE6CD193DAA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{388411B7-FC12-438A-BC16-0CE6CD193DAA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{388411B7-FC12-438A-BC16-0CE6CD193DAA}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{83F1EF25-A39E-4043-88D0-ABD80263FDF4} = {9B6C241E-6A7B-452E-908C-EEBE583DD836}
+		{229EF564-D7AA-4270-8635-DD025A2B87E8} = {9B6C241E-6A7B-452E-908C-EEBE583DD836}
+		{E533BCF2-7C1D-47E5-8FE8-58CB36904808} = {9B6C241E-6A7B-452E-908C-EEBE583DD836}
+		{8EB8DFE6-37B0-4CE6-B9F9-FAB982F52C07} = {9B6C241E-6A7B-452E-908C-EEBE583DD836}
+		{388411B7-FC12-438A-BC16-0CE6CD193DAA} = {04E9E1DF-0B9F-4F28-B6C5-461464C3FFD1}
+	EndGlobalSection
+EndGlobal

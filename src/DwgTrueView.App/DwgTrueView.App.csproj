@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DwgTrueView.Core\DwgTrueView.Core.csproj" />
+    <ProjectReference Include="..\DwgTrueView.Cad\DwgTrueView.Cad.csproj" />
+    <ProjectReference Include="..\DwgTrueView.Rendering.DirectX\DwgTrueView.Rendering.DirectX.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>
