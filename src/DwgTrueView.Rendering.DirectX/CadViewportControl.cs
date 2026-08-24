@@ -69,8 +69,10 @@ public sealed class CadViewportControl : Control
     private VertexShader? _vertexShader;
     private PixelShader? _pixelShader;
     private InputLayout? _inputLayout;
+    private RasterizerState? _rasterizer;
     private Buffer? _cameraBuffer;
     private Buffer? _cadBuffer;
+    private Buffer? _fillBuffer;
     private Buffer? _gridBuffer;
     private PackedCadDrawing? _drawing;
     private bool[] _layerVisibility = [];
@@ -395,6 +397,14 @@ public sealed class CadViewportControl : Control
                     8,
                     0),
             ]);
+        _rasterizer = new RasterizerState(
+            _device,
+            new RasterizerStateDescription
+            {
+                CullMode = CullMode.None,
+                FillMode = FillMode.Solid,
+                IsDepthClipEnabled = false,
+            });
     }
 
     private void CreateRenderTarget(bool resizeBuffers)
@@ -423,21 +433,39 @@ public sealed class CadViewportControl : Control
     {
         _cadBuffer?.Dispose();
         _cadBuffer = null;
-        if (_device is null || _drawing is null || _drawing.Vertices.IsEmpty)
+        _fillBuffer?.Dispose();
+        _fillBuffer = null;
+        if (_device is null || _drawing is null)
         {
             RequestFrame();
             return;
         }
-        if (!MemoryMarshal.TryGetArray(
-                _drawing.Vertices,
-                out ArraySegment<CadVertex> segment)
-            || segment.Array is null
-            || segment.Offset != 0
-            || segment.Count != segment.Array.Length)
+        if (!_drawing.Vertices.IsEmpty)
         {
-            throw new InvalidOperationException("Packed CAD vertices must use one array.");
+            if (!MemoryMarshal.TryGetArray(
+                    _drawing.Vertices,
+                    out ArraySegment<CadVertex> segment)
+                || segment.Array is null
+                || segment.Offset != 0
+                || segment.Count != segment.Array.Length)
+            {
+                throw new InvalidOperationException("Packed CAD vertices must use one array.");
+            }
+            _cadBuffer = Buffer.Create(_device, BindFlags.VertexBuffer, segment.Array);
         }
-        _cadBuffer = Buffer.Create(_device, BindFlags.VertexBuffer, segment.Array);
+        if (!_drawing.FillVertices.IsEmpty)
+        {
+            if (!MemoryMarshal.TryGetArray(
+                    _drawing.FillVertices,
+                    out ArraySegment<CadVertex> fills)
+                || fills.Array is null
+                || fills.Offset != 0
+                || fills.Count != fills.Array.Length)
+            {
+                throw new InvalidOperationException("Packed CAD fill vertices must use one array.");
+            }
+            _fillBuffer = Buffer.Create(_device, BindFlags.VertexBuffer, fills.Array);
+        }
         RequestFrame();
     }
 
@@ -474,6 +502,10 @@ public sealed class CadViewportControl : Control
             _context.VertexShader.Set(_vertexShader);
             _context.VertexShader.SetConstantBuffer(0, _cameraBuffer);
             _context.PixelShader.Set(_pixelShader);
+            if (_rasterizer is not null)
+            {
+                _context.Rasterizer.State = _rasterizer;
+            }
 
             float halfWidth = Math.Max(
                 Camera.UnitsPerPixel * ClientSize.Width * 0.5f,
@@ -506,8 +538,31 @@ public sealed class CadViewportControl : Control
                 }
             }
 
+            if (_fillBuffer is not null && _drawing is not null)
+            {
+                _context.InputAssembler.PrimitiveTopology = PrimitiveTopology.TriangleList;
+                _context.InputAssembler.SetVertexBuffers(
+                    0,
+                    new VertexBufferBinding(
+                        _fillBuffer,
+                        CadVertex.SizeInBytes,
+                        0));
+                ReadOnlySpan<CadDrawRange> fillRanges = _drawing.FillDrawRanges.Span;
+                for (int index = 0; index < fillRanges.Length; index++)
+                {
+                    CadDrawRange range = fillRanges[index];
+                    if (range.VertexCount > 0
+                        && IsLayerVisible(range.LayerId)
+                        && IsLayerVisible(range.GateLayerId))
+                    {
+                        _context.Draw(range.VertexCount, range.StartVertex);
+                    }
+                }
+            }
+
             if (_cadBuffer is not null && _drawing is not null)
             {
+                _context.InputAssembler.PrimitiveTopology = PrimitiveTopology.LineList;
                 _context.InputAssembler.SetVertexBuffers(
                     0,
                     new VertexBufferBinding(
@@ -613,9 +668,11 @@ public sealed class CadViewportControl : Control
         _context?.ClearState();
         _context?.Flush();
         _cadBuffer?.Dispose();
+        _fillBuffer?.Dispose();
         _gridBuffer?.Dispose();
         _cameraBuffer?.Dispose();
         _inputLayout?.Dispose();
+        _rasterizer?.Dispose();
         _vertexShader?.Dispose();
         _pixelShader?.Dispose();
         _renderTarget?.Dispose();
@@ -623,9 +680,11 @@ public sealed class CadViewportControl : Control
         _context?.Dispose();
         _device?.Dispose();
         _cadBuffer = null;
+        _fillBuffer = null;
         _gridBuffer = null;
         _cameraBuffer = null;
         _inputLayout = null;
+        _rasterizer = null;
         _vertexShader = null;
         _pixelShader = null;
         _renderTarget = null;

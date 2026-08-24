@@ -13,6 +13,7 @@ internal static class CadMath
 {
     private const float AxisTolerance = 1f / 64f;
     private const float OriginEpsilon = 1e-8f;
+    private const float OriginRayHideDistance = 1f;
 
     public static Matrix4x4 InsertTransform(
         Insert insert,
@@ -33,56 +34,72 @@ internal static class CadMath
         out Matrix4x4 transform)
     {
         transform = default;
-        if (!TryPoint(insert.InsertPoint, out Vector3 insertion))
+        try
         {
+            if (insert is null || !TryPoint(insert.InsertPoint, out Vector3 insertion))
+            {
+                return false;
+            }
+
+            Vector3 scale = new(
+                (float)insert.XScale,
+                (float)insert.YScale,
+                (float)insert.ZScale);
+            if (!IsUsable(scale)
+                || scale.X == 0
+                || scale.Y == 0
+                || scale.Z == 0)
+            {
+                return false;
+            }
+
+            Vector3 normal = UsableNormal(insert.Normal);
+            CreateOcsBasis(normal, out Vector3 xAxis, out Vector3 yAxis, out Vector3 zAxis);
+            Matrix4x4 ocsToWorld = OcsToWorldMatrix(xAxis, yAxis, zAxis);
+
+            float rotation = (float)insert.Rotation;
+            if (!float.IsFinite(rotation))
+            {
+                return false;
+            }
+
+            float cos = MathF.Cos(rotation);
+            float sin = MathF.Sin(rotation);
+            Vector3 ocsTranslation = insertion + new Vector3(
+                arrayOffset.X * cos - arrayOffset.Y * sin,
+                arrayOffset.X * sin + arrayOffset.Y * cos,
+                0);
+
+            // Autodesk INSERT: T(insert) × R × S × T(-base), then OCS→WCS (group 210).
+            // System.Numerics is row-vector, so that product is written last-to-first.
+            transform = Matrix4x4.CreateTranslation(-blockBasePoint)
+                * Matrix4x4.CreateScale(scale)
+                * Matrix4x4.CreateRotationZ(rotation)
+                * Matrix4x4.CreateTranslation(ocsTranslation)
+                * ocsToWorld;
+            return true;
+        }
+        catch (Exception)
+        {
+            transform = default;
             return false;
         }
-
-        Vector3 scale = new(
-            (float)insert.XScale,
-            (float)insert.YScale,
-            (float)insert.ZScale);
-        if (!IsUsable(scale)
-            || scale.X == 0
-            || scale.Y == 0
-            || scale.Z == 0)
-        {
-            return false;
-        }
-
-        Vector3 normal = UsableNormal(insert.Normal);
-        CreateOcsBasis(normal, out Vector3 xAxis, out Vector3 yAxis, out Vector3 zAxis);
-        Matrix4x4 ocsToWorld = OcsToWorldMatrix(xAxis, yAxis, zAxis);
-
-        float rotation = (float)insert.Rotation;
-        if (!float.IsFinite(rotation))
-        {
-            return false;
-        }
-
-        float cos = MathF.Cos(rotation);
-        float sin = MathF.Sin(rotation);
-        Vector3 ocsTranslation = insertion + new Vector3(
-            arrayOffset.X * cos - arrayOffset.Y * sin,
-            arrayOffset.X * sin + arrayOffset.Y * cos,
-            0);
-
-        transform = Matrix4x4.CreateTranslation(-blockBasePoint)
-            * Matrix4x4.CreateScale(scale)
-            * Matrix4x4.CreateRotationZ(rotation)
-            * Matrix4x4.CreateTranslation(ocsTranslation)
-            * ocsToWorld;
-        return true;
     }
 
     public static Vector3 BlockBasePoint(BlockRecord? block)
     {
-        if (block?.BlockEntity is null
-            || !TryPoint(block.BlockEntity.BasePoint, out Vector3 origin))
+        try
         {
-            return Vector3.Zero;
+            CSMath.XYZ? origin = block?.BlockEntity?.BasePoint;
+            if (origin is CSMath.XYZ point && TryPoint(point, out Vector3 vector))
+            {
+                return vector;
+            }
         }
-        return origin;
+        catch (Exception)
+        {
+        }
+        return Vector3.Zero;
     }
 
     public static void CreateOcsBasis(
@@ -181,6 +198,24 @@ internal static class CadMath
 
     public static bool IsOrigin(Vector3 point) =>
         point.LengthSquared() <= OriginEpsilon;
+
+    /// <summary>
+    /// Hide a segment whose one endpoint collapsed to WCS (0,0) while the
+    /// other landed far away — the classic unresolved definition-point ray.
+    /// </summary>
+    public static bool IsCorruptOriginRay(Vector3 start, Vector3 end)
+    {
+        var a = new Vector3(start.X, start.Y, 0);
+        var b = new Vector3(end.X, end.Y, 0);
+        bool startOrigin = IsOrigin(a);
+        bool endOrigin = IsOrigin(b);
+        if (startOrigin == endOrigin)
+        {
+            return false;
+        }
+        float lengthSquared = Vector3.DistanceSquared(a, b);
+        return lengthSquared > OriginRayHideDistance * OriginRayHideDistance;
+    }
 
     public static bool PreferExplicitPoint(Vector3 preferred, Vector3 fallback) =>
         IsUsable(preferred) && !(IsOrigin(preferred) && !IsOrigin(fallback));

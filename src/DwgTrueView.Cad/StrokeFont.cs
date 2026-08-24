@@ -5,16 +5,14 @@ namespace DwgTrueView.Cad;
 
 /// <summary>
 /// Lightweight stroke-font outlines for CAD TEXT/MTEXT. Glyphs are unit-height
-/// polylines that land in the same GPU line batch as geometry. A thin boundary
-/// box is always emitted so labels stay visible even for unknown characters.
+/// polylines that land in the same GPU line batch as geometry. A text frame is
+/// emitted only when the DXF MTEXT group-90 background/frame bits are set.
 /// </summary>
 internal static class StrokeFont
 {
-    public const float Advance = 0.72f;
+    public const float Advance = 0.55f;
     private const float BoxPadX = 0.08f;
     private const float BoxPadY = 0.18f;
-    private const int MaxCharacters = 96;
-    private const int MaxLines = 6;
 
     private static readonly Dictionary<char, string> Glyphs = CreateGlyphs();
 
@@ -31,62 +29,114 @@ internal static class StrokeFont
         float wrapWidth,
         int layerId,
         CadColorValue color,
-        List<LocalSegment> destination)
+        List<LocalSegment> destination,
+        bool drawFrame = false,
+        float lineSpacingFactor = 1f,
+        ACadSharp.Tables.TextStyle? style = null)
     {
         if (height <= 1e-6f)
         {
             return;
         }
 
-        string[] prepared = PrepareLines(lines, wrapWidth, height, widthFactor);
-        if (prepared.Length == 0)
+        if (SystemFontOutlines.TryAppend(
+                lines,
+                origin,
+                axisX,
+                axisY,
+                height,
+                widthFactor,
+                oblique,
+                alignX,
+                alignY,
+                wrapWidth,
+                lineSpacingFactor,
+                style,
+                layerId,
+                color,
+                destination))
+        {
+            if (drawFrame)
+            {
+                string[] prepared = CadTextLayout.Wrap(
+                    lines,
+                    wrapWidth,
+                    text => Measure(text) * height * widthFactor);
+                float maxWidth = wrapWidth;
+                foreach (string line in prepared)
+                {
+                    maxWidth = MathF.Max(maxWidth, Measure(line) * height * widthFactor);
+                }
+                float lineHeight = height * (5f / 3f) * (lineSpacingFactor > 0 ? lineSpacingFactor : 1f);
+                float blockHeight = Math.Max(prepared.Length - 1, 0) * lineHeight + height;
+                AppendBox(
+                    origin,
+                    axisX,
+                    axisY,
+                    -alignX * maxWidth - BoxPadX * height,
+                    -alignY * blockHeight - BoxPadY * height,
+                    maxWidth + BoxPadX * 2 * height,
+                    blockHeight + BoxPadY * 1.4f * height,
+                    height,
+                    MathF.Tan(oblique),
+                    layerId,
+                    color,
+                    destination);
+            }
+            return;
+        }
+
+        string[] fallback = CadTextLayout.Wrap(
+            lines,
+            wrapWidth,
+            text => Measure(text) * height * widthFactor);
+        if (fallback.Length == 0)
         {
             return;
         }
 
-        float lineHeight = height * 1.35f;
-        float maxWidth = 0;
-        foreach (string line in prepared)
+        float strokeLineHeight = height * (5f / 3f) * (lineSpacingFactor > 0 ? lineSpacingFactor : 1f);
+        float strokeMaxWidth = 0;
+        foreach (string line in fallback)
         {
-            maxWidth = MathF.Max(maxWidth, Measure(line) * height * widthFactor);
+            strokeMaxWidth = MathF.Max(strokeMaxWidth, Measure(line) * height * widthFactor);
         }
         if (wrapWidth > 0)
         {
-            maxWidth = MathF.Max(maxWidth, wrapWidth);
+            strokeMaxWidth = MathF.Max(strokeMaxWidth, wrapWidth);
         }
 
-        float blockHeight = Math.Max(prepared.Length - 1, 0) * lineHeight + height;
-        float originX = -alignX * maxWidth;
-        float originY = -alignY * blockHeight;
+        float strokeBlockHeight = Math.Max(fallback.Length - 1, 0) * strokeLineHeight + height;
+        float originX = -alignX * strokeMaxWidth;
+        float originY = -alignY * strokeBlockHeight;
         float shear = MathF.Tan(oblique);
 
-        AppendBox(
-            origin,
-            axisX,
-            axisY,
-            originX - BoxPadX * height,
-            originY - BoxPadY * height,
-            maxWidth + BoxPadX * 2 * height,
-            blockHeight + BoxPadY * 1.4f * height,
-            height,
-            shear,
-            layerId,
-            color,
-            destination);
-
-        for (int lineIndex = 0; lineIndex < prepared.Length; lineIndex++)
+        if (drawFrame)
         {
-            string line = prepared[lineIndex];
+            AppendBox(
+                origin,
+                axisX,
+                axisY,
+                originX - BoxPadX * height,
+                originY - BoxPadY * height,
+                strokeMaxWidth + BoxPadX * 2 * height,
+                strokeBlockHeight + BoxPadY * 1.4f * height,
+                height,
+                shear,
+                layerId,
+                color,
+                destination);
+        }
+
+        for (int lineIndex = 0; lineIndex < fallback.Length; lineIndex++)
+        {
+            string line = fallback[lineIndex];
             float lineWidth = Measure(line) * height * widthFactor;
-            float cursorX = originX + alignX * (maxWidth - lineWidth);
-            float cursorY = originY + (prepared.Length - 1 - lineIndex) * lineHeight;
+            float cursorX = originX + alignX * (strokeMaxWidth - lineWidth);
+            float cursorY = originY + (fallback.Length - 1 - lineIndex) * strokeLineHeight;
             float x = cursorX;
             foreach (char raw in line)
             {
-                if (x > originX + maxWidth + height)
-                {
-                    break;
-                }
                 char key = Normalize(raw);
                 if (key == ' ')
                 {
@@ -128,6 +178,8 @@ internal static class StrokeFont
         }
     }
 
+    internal static char NormalizePublic(char value) => Normalize(value);
+
     public static float Measure(string text)
     {
         int count = 0;
@@ -139,43 +191,6 @@ internal static class StrokeFont
             }
         }
         return count * Advance;
-    }
-
-    private static string[] PrepareLines(
-        IReadOnlyList<string> lines,
-        float wrapWidth,
-        float height,
-        float widthFactor)
-    {
-        var result = new List<string>(Math.Min(lines.Count, MaxLines));
-        int remaining = MaxCharacters;
-        float column = wrapWidth > 0
-            ? Math.Max(1, wrapWidth / Math.Max(height * widthFactor * Advance, 1e-4f))
-            : MaxCharacters;
-        int maxColumns = Math.Clamp((int)MathF.Floor(column), 1, MaxCharacters);
-
-        foreach (string raw in lines)
-        {
-            if (result.Count >= MaxLines || remaining <= 0)
-            {
-                break;
-            }
-            string line = (raw ?? string.Empty).Replace('\t', ' ');
-            if (line.Length == 0)
-            {
-                result.Add(string.Empty);
-                continue;
-            }
-            int offset = 0;
-            while (offset < line.Length && result.Count < MaxLines && remaining > 0)
-            {
-                int take = Math.Min(Math.Min(maxColumns, remaining), line.Length - offset);
-                result.Add(line.Substring(offset, take));
-                remaining -= take;
-                offset += take;
-            }
-        }
-        return result.ToArray();
     }
 
     private static void AppendGlyph(

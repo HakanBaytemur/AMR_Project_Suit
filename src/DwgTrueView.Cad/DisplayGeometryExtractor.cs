@@ -9,6 +9,26 @@ internal readonly record struct LocalSegment(
     int LayerId,
     CadColorValue Color);
 
+internal readonly record struct LocalTriangle(
+    Vector3 A,
+    Vector3 B,
+    Vector3 C,
+    int LayerId,
+    CadColorValue Color,
+    CadColorValue ColorB,
+    CadColorValue ColorC)
+{
+    public LocalTriangle(
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        int layerId,
+        CadColorValue color)
+        : this(a, b, c, layerId, color, color, color)
+    {
+    }
+}
+
 internal static class DisplayGeometryExtractor
 {
     private const float TwoPi = MathF.PI * 2;
@@ -18,7 +38,34 @@ internal static class DisplayGeometryExtractor
     public static bool Append(
         Entity entity,
         int layerId,
-        List<LocalSegment> destination)
+        List<LocalSegment> destination) =>
+        Append(entity, layerId, destination, fills: null);
+
+    public static bool Append(
+        Entity entity,
+        int layerId,
+        List<LocalSegment> destination,
+        List<LocalTriangle>? fills)
+    {
+        if (entity is null)
+        {
+            return false;
+        }
+        try
+        {
+            return AppendCore(entity, layerId, destination, fills);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool AppendCore(
+        Entity entity,
+        int layerId,
+        List<LocalSegment> destination,
+        List<LocalTriangle>? fills)
     {
         if (entity.IsInvisible)
         {
@@ -27,6 +74,15 @@ internal static class DisplayGeometryExtractor
         CadColorValue color = CadColorResolver.FromCadColor(entity.Color);
         switch (entity)
         {
+            case AttributeDefinition:
+                return true;
+            case AttributeEntity attrib:
+                if ((attrib.Flags & AttributeFlags.Hidden) != 0)
+                {
+                    return true;
+                }
+                AppendText(attrib, layerId, color, destination);
+                return true;
             case ACadSharp.Entities.Line line:
                 if (CadMath.TryWorldPoint(line.StartPoint, out Vector3 lineStart)
                     && CadMath.TryWorldPoint(line.EndPoint, out Vector3 lineEnd))
@@ -78,13 +134,26 @@ internal static class DisplayGeometryExtractor
                 AppendSpline(spline, layerId, color, destination);
                 return true;
             case Hatch hatch:
-                AppendHatch(hatch, layerId, color, destination);
+                AppendHatch(hatch, layerId, color, destination, fills);
+                return true;
+            case Solid solid:
+                AppendSolid(solid, layerId, color, destination, fills);
+                return true;
+            case Leader leader:
+                AppendLeader(leader, layerId, color, destination);
+                return true;
+            case Dimension:
                 return true;
             case MText mtext:
                 AppendMText(mtext, layerId, color, destination);
                 return true;
             case TextEntity text:
                 AppendText(text, layerId, color, destination);
+                return true;
+            case Ray:
+            case XLine:
+            case ProxyEntity:
+            case UnknownEntity:
                 return true;
             default:
                 return false;
@@ -97,8 +166,9 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        int count = polyline.Vertices.Count;
-        if (count < 2)
+        var vertices = polyline.Vertices;
+        int count = vertices?.Count ?? 0;
+        if (count < 2 || vertices is null)
         {
             return;
         }
@@ -107,8 +177,12 @@ internal static class DisplayGeometryExtractor
         int segmentCount = polyline.IsClosed ? count : count - 1;
         for (int index = 0; index < segmentCount; index++)
         {
-            LwPolyline.Vertex current = polyline.Vertices[index];
-            LwPolyline.Vertex next = polyline.Vertices[(index + 1) % count];
+            LwPolyline.Vertex current = vertices[index];
+            LwPolyline.Vertex next = vertices[(index + 1) % count];
+            if (current is null || next is null)
+            {
+                continue;
+            }
             if (!TryLwVertex(current, elevation, polyline.Normal, out Vector3 start)
                 || !TryLwVertex(next, elevation, polyline.Normal, out Vector3 end))
             {
@@ -240,8 +314,9 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        int count = polyline.Vertices.Count;
-        if (count < 2)
+        var vertices = polyline.Vertices;
+        int count = vertices?.Count ?? 0;
+        if (count < 2 || vertices is null)
         {
             return;
         }
@@ -250,8 +325,12 @@ internal static class DisplayGeometryExtractor
         int segmentCount = polyline.IsClosed ? count : count - 1;
         for (int index = 0; index < segmentCount; index++)
         {
-            Vertex2D current = polyline.Vertices[index];
-            Vertex2D next = polyline.Vertices[(index + 1) % count];
+            Vertex2D current = vertices[index];
+            Vertex2D next = vertices[(index + 1) % count];
+            if (current is null || next is null)
+            {
+                continue;
+            }
             if (!CadMath.TryOcsToWcs(
                     current.Location.X,
                     current.Location.Y,
@@ -298,16 +377,21 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        int count = polyline.Vertices.Count;
-        if (count < 2)
+        var vertices = polyline.Vertices;
+        int count = vertices?.Count ?? 0;
+        if (count < 2 || vertices is null)
         {
             return;
         }
         int segmentCount = polyline.IsClosed ? count : count - 1;
         for (int index = 0; index < segmentCount; index++)
         {
-            Vertex3D current = polyline.Vertices[index];
-            Vertex3D next = polyline.Vertices[(index + 1) % count];
+            Vertex3D current = vertices[index];
+            Vertex3D next = vertices[(index + 1) % count];
+            if (current is null || next is null)
+            {
+                continue;
+            }
             if (!CadMath.TryWorldPoint(current.Location, out Vector3 start)
                 || !CadMath.TryWorldPoint(next.Location, out Vector3 end))
             {
@@ -331,7 +415,7 @@ internal static class DisplayGeometryExtractor
             float minorLength = (float)(ellipse.RadiusRatio * ellipse.MajorAxis);
             if (minorLength > 0 && major.LengthSquared() > 0)
             {
-                Vector3 normal = CadMath.ToVector(ellipse.Normal);
+                Vector3 normal = CadMath.UsableNormal(ellipse.Normal);
                 CadMath.CreateOcsBasis(normal, out _, out _, out Vector3 axisZ);
                 minor = Vector3.Normalize(Vector3.Cross(axisZ, major)) * minorLength;
             }
@@ -367,7 +451,7 @@ internal static class DisplayGeometryExtractor
             return;
         }
 
-        if (spline.ControlPoints.Count >= 2)
+        if (spline.ControlPoints is { Count: >= 2 })
         {
             CurveTessellator.AppendNurbs(
                 ToVectors(spline.ControlPoints),
@@ -381,7 +465,7 @@ internal static class DisplayGeometryExtractor
             return;
         }
 
-        if (spline.FitPoints.Count >= 2)
+        if (spline.FitPoints is { Count: >= 2 })
         {
             CurveTessellator.AppendChain(
                 ToVectors(spline.FitPoints),
@@ -396,19 +480,45 @@ internal static class DisplayGeometryExtractor
         Hatch hatch,
         int layerId,
         CadColorValue color,
-        List<LocalSegment> destination)
+        List<LocalSegment> destination,
+        List<LocalTriangle>? fills)
     {
         CadMath.CreateOcsBasis(
-            CadMath.ToVector(hatch.Normal),
+            CadMath.UsableNormal(hatch.Normal),
             out Vector3 axisX,
             out Vector3 axisY,
             out Vector3 axisZ);
         Vector3 origin = axisZ * (float)hatch.Elevation;
+        if (hatch.Paths is null)
+        {
+            return;
+        }
+
+        bool fill = fills is not null
+            && (hatch.IsSolid
+                || hatch.PatternType == HatchPatternType.SolidFill
+                || hatch.GradientColor?.Enabled == true);
+        var loops = fill ? new List<List<Vector3>>() : null;
+
         foreach (Hatch.BoundaryPath path in hatch.Paths)
         {
+            if (path?.Edges is null)
+            {
+                continue;
+            }
+            if (fill)
+            {
+                var loop = new List<Vector3>();
+                CollectHatchLoop(path, origin, axisX, axisY, loop);
+                if (loop.Count >= 3)
+                {
+                    loops!.Add(loop);
+                }
+                continue;
+            }
             if (path.IsPolyline)
             {
-                foreach (Hatch.BoundaryPath.Edge edge in path.Edges)
+                foreach (Hatch.BoundaryPath.Edge? edge in path.Edges)
                 {
                     if (edge is Hatch.BoundaryPath.Polyline polyline)
                     {
@@ -425,8 +535,12 @@ internal static class DisplayGeometryExtractor
                 continue;
             }
 
-            foreach (Hatch.BoundaryPath.Edge edge in path.Edges)
+            foreach (Hatch.BoundaryPath.Edge? edge in path.Edges)
             {
+                if (edge is null)
+                {
+                    continue;
+                }
                 switch (edge)
                 {
                     case Hatch.BoundaryPath.Line line:
@@ -472,6 +586,224 @@ internal static class DisplayGeometryExtractor
                 }
             }
         }
+
+        if (!fill || loops is null || fills is null)
+        {
+            return;
+        }
+        ResolveHatchFillColors(hatch, color, out CadColorValue colorA, out CadColorValue colorB);
+        IEnumerable<List<Vector3>> selected = hatch.Style == HatchStyleType.Outer
+            && loops.Count > 1
+            ? [loops.OrderByDescending(static loop => MathF.Abs(LoopArea(loop))).First()]
+            : loops;
+        foreach (List<Vector3> loop in selected)
+        {
+            HatchFillTessellator.Append(loop, layerId, colorA, colorB, colorA, fills);
+        }
+    }
+
+    private static void CollectHatchLoop(
+        Hatch.BoundaryPath path,
+        Vector3 origin,
+        Vector3 axisX,
+        Vector3 axisY,
+        List<Vector3> loop)
+    {
+        var edges = new List<LocalSegment>();
+        if (path.IsPolyline)
+        {
+            foreach (Hatch.BoundaryPath.Edge? edge in path.Edges)
+            {
+                if (edge is Hatch.BoundaryPath.Polyline polyline)
+                {
+                    AppendHatchPolyline(polyline, origin, axisX, axisY, 0, default, edges);
+                }
+            }
+        }
+        else
+        {
+            foreach (Hatch.BoundaryPath.Edge? edge in path.Edges)
+            {
+                switch (edge)
+                {
+                    case Hatch.BoundaryPath.Line line:
+                        if (TryHatchPoint(line.Start, origin, axisX, axisY, out Vector3 hatchStart)
+                            && TryHatchPoint(line.End, origin, axisX, axisY, out Vector3 hatchEnd))
+                        {
+                            Add(edges, hatchStart, hatchEnd, 0, default);
+                        }
+                        break;
+                    case Hatch.BoundaryPath.Polyline polyline:
+                        AppendHatchPolyline(polyline, origin, axisX, axisY, 0, default, edges);
+                        break;
+                    case Hatch.BoundaryPath.Arc arc:
+                        AppendHatchArc(arc, origin, axisX, axisY, 0, default, edges);
+                        break;
+                    case Hatch.BoundaryPath.Ellipse ellipse:
+                        AppendHatchEllipse(ellipse, origin, axisX, axisY, 0, default, edges);
+                        break;
+                    case Hatch.BoundaryPath.Spline spline:
+                        AppendHatchSpline(spline, origin, axisX, axisY, 0, default, edges);
+                        break;
+                }
+            }
+        }
+        foreach (LocalSegment segment in edges)
+        {
+            if (loop.Count == 0)
+            {
+                loop.Add(segment.Start);
+            }
+            loop.Add(segment.End);
+        }
+    }
+
+    private static void ResolveHatchFillColors(
+        Hatch hatch,
+        CadColorValue fallback,
+        out CadColorValue colorA,
+        out CadColorValue colorB)
+    {
+        colorA = fallback;
+        colorB = fallback;
+        HatchGradientPattern? gradient = hatch.GradientColor;
+        if (gradient?.Enabled != true || gradient.Colors is null || gradient.Colors.Count == 0)
+        {
+            return;
+        }
+        try
+        {
+            GradientColor first = gradient.Colors[0];
+            colorA = CadColorResolver.FromCadColor(first.Color);
+            colorB = gradient.Colors.Count > 1
+                ? CadColorResolver.FromCadColor(gradient.Colors[^1].Color)
+                : colorA;
+        }
+        catch (Exception)
+        {
+            colorA = fallback;
+            colorB = fallback;
+        }
+    }
+
+    private static float LoopArea(IReadOnlyList<Vector3> loop)
+    {
+        float area = 0;
+        for (int i = 0; i < loop.Count; i++)
+        {
+            Vector3 a = loop[i];
+            Vector3 b = loop[(i + 1) % loop.Count];
+            area += (a.X * b.Y) - (b.X * a.Y);
+        }
+        return area * 0.5f;
+    }
+
+    private static void AppendSolid(
+        Solid solid,
+        int layerId,
+        CadColorValue color,
+        List<LocalSegment> destination,
+        List<LocalTriangle>? fills)
+    {
+        if (!CadMath.TryOcsToWcs(solid.FirstCorner, solid.Normal, out Vector3 a)
+            || !CadMath.TryOcsToWcs(solid.SecondCorner, solid.Normal, out Vector3 b)
+            || !CadMath.TryOcsToWcs(solid.ThirdCorner, solid.Normal, out Vector3 c))
+        {
+            return;
+        }
+        Vector3 d = CadMath.TryOcsToWcs(solid.FourthCorner, solid.Normal, out Vector3 fourth)
+            ? fourth
+            : c;
+        if (fills is not null)
+        {
+            HatchFillTessellator.Append([a, b, d, c], layerId, color, color, color, fills);
+            return;
+        }
+        Add(destination, a, b, layerId, color);
+        Add(destination, b, d, layerId, color);
+        Add(destination, d, c, layerId, color);
+        Add(destination, c, a, layerId, color);
+    }
+
+    private static void AppendLeader(
+        Leader leader,
+        int layerId,
+        CadColorValue color,
+        List<LocalSegment> destination)
+    {
+        var vertices = leader.Vertices;
+        int count = vertices?.Count ?? 0;
+        if (count < 2 || vertices is null)
+        {
+            return;
+        }
+        var points = new List<Vector3>(count);
+        foreach (CSMath.XYZ vertex in vertices)
+        {
+            if (!CadMath.TryWorldPoint(vertex, out Vector3 world))
+            {
+                continue;
+            }
+            points.Add(world);
+        }
+        if (points.Count < 2)
+        {
+            return;
+        }
+        Vector3 centroid = Vector3.Zero;
+        foreach (Vector3 point in points)
+        {
+            centroid += point;
+        }
+        centroid /= points.Count;
+        var filtered = new List<Vector3>(points.Count);
+        foreach (Vector3 point in points)
+        {
+            if (CadMath.IsOrigin(point)
+                && Vector3.DistanceSquared(point, centroid) > 1f)
+            {
+                continue;
+            }
+            filtered.Add(point);
+        }
+        if (filtered.Count < 2)
+        {
+            return;
+        }
+        for (int i = 0; i < filtered.Count - 1; i++)
+        {
+            Add(destination, filtered[i], filtered[i + 1], layerId, color);
+        }
+        if (leader.ArrowHeadEnabled && filtered.Count >= 2)
+        {
+            AppendLeaderArrow(filtered[0], filtered[1], layerId, color, destination);
+        }
+    }
+
+    private static void AppendLeaderArrow(
+        Vector3 tip,
+        Vector3 along,
+        int layerId,
+        CadColorValue color,
+        List<LocalSegment> destination)
+    {
+        Vector3 direction = along - tip;
+        if (direction.LengthSquared() <= 1e-8f)
+        {
+            return;
+        }
+        direction = Vector3.Normalize(direction);
+        Vector3 side = new(-direction.Y, direction.X, 0);
+        float size = MathF.Min(Vector3.Distance(tip, along) * 0.15f, 2.5f);
+        if (size <= 1e-4f)
+        {
+            return;
+        }
+        Vector3 left = tip + direction * size + side * size * 0.35f;
+        Vector3 right = tip + direction * size - side * size * 0.35f;
+        Add(destination, tip, left, layerId, color);
+        Add(destination, tip, right, layerId, color);
+        Add(destination, left, right, layerId, color);
     }
 
     private static void AppendHatchPolyline(
@@ -483,8 +815,9 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        int count = polyline.Vertices.Count;
-        if (count < 2)
+        var vertices = polyline.Vertices;
+        int count = vertices?.Count ?? 0;
+        if (count < 2 || vertices is null)
         {
             return;
         }
@@ -492,8 +825,8 @@ internal static class DisplayGeometryExtractor
         IReadOnlyList<double> bulges = CopyDoubles(polyline.Bulges);
         for (int index = 0; index < segmentCount; index++)
         {
-            CSMath.XYZ current = polyline.Vertices[index];
-            CSMath.XYZ next = polyline.Vertices[(index + 1) % count];
+            CSMath.XYZ current = vertices[index];
+            CSMath.XYZ next = vertices[(index + 1) % count];
             if (!TryHatchPoint(
                     new CSMath.XYZ(current.X, current.Y, 0),
                     origin,
@@ -623,8 +956,16 @@ internal static class DisplayGeometryExtractor
                 EstimateHatchSplineLength(spline, origin, axisX, axisY)),
             CurveTessellator.MinSegments,
             CurveTessellator.MaxSegments);
-        List<CSMath.XYZ> samples = spline.PolygonalVertexes(precision);
-        if (samples.Count >= 2)
+        List<CSMath.XYZ>? samples = null;
+        try
+        {
+            samples = spline.PolygonalVertexes(precision);
+        }
+        catch (Exception)
+        {
+            samples = null;
+        }
+        if (samples is { Count: >= 2 })
         {
             var points = new List<Vector3>(samples.Count);
             foreach (CSMath.XYZ sample in samples)
@@ -648,6 +989,10 @@ internal static class DisplayGeometryExtractor
             return;
         }
 
+        if (spline.ControlPoints is null || spline.ControlPoints.Count == 0)
+        {
+            return;
+        }
         var controls = new List<Vector3>(spline.ControlPoints.Count);
         var weights = new List<double>(spline.ControlPoints.Count);
         foreach (CSMath.XYZ control in spline.ControlPoints)
@@ -732,14 +1077,17 @@ internal static class DisplayGeometryExtractor
             axisX,
             axisY,
             (float)Math.Max(text.Height, 1e-4),
-            text.WidthFactor > 0 ? (float)text.WidthFactor : 1f,
-            (float)text.ObliqueAngle,
+            text.WidthFactor > 0
+                ? (float)text.WidthFactor
+                : text.Style?.Width > 0 ? (float)text.Style.Width : 1f,
+            (float)(text.ObliqueAngle != 0 ? text.ObliqueAngle : text.Style?.ObliqueAngle ?? 0),
             alignX,
             alignY,
             0,
             layerId,
             color,
-            destination);
+            destination,
+            style: text.Style);
     }
 
     private static void AppendMText(
@@ -748,10 +1096,26 @@ internal static class DisplayGeometryExtractor
         CadColorValue color,
         List<LocalSegment> destination)
     {
-        string[] lines = mtext.GetPlainTextLines();
+        string[] lines;
+        try
+        {
+            lines = mtext.GetPlainTextLines() ?? [];
+        }
+        catch (Exception)
+        {
+            lines = [];
+        }
         if (lines.Length == 0 || lines.All(string.IsNullOrWhiteSpace))
         {
-            string plain = mtext.PlainText;
+            string plain;
+            try
+            {
+                plain = mtext.PlainText;
+            }
+            catch (Exception)
+            {
+                return;
+            }
             if (string.IsNullOrWhiteSpace(plain))
             {
                 return;
@@ -768,24 +1132,33 @@ internal static class DisplayGeometryExtractor
             out Vector3 axisX,
             out Vector3 axisY);
         AttachmentAlign(mtext.AttachmentPoint, out float alignX, out float alignY);
-        float wrap = mtext.RectangleWidth > 0
-            ? (float)mtext.RectangleWidth
-            : (float)mtext.HorizontalWidth;
+        float wrap = mtext.RectangleWidth > 0 ? (float)mtext.RectangleWidth : 0f;
+        float widthFactor = mtext.Style?.Width > 0 ? (float)mtext.Style.Width : 1f;
+        float spacing = (float)(mtext.LineSpacing > 0 ? mtext.LineSpacing : 1);
         StrokeFont.AppendLabel(
             lines,
             origin,
             axisX,
             axisY,
             (float)Math.Max(mtext.Height, 1e-4),
-            1f,
-            0,
+            widthFactor,
+            (float)(mtext.Style?.ObliqueAngle ?? 0),
             alignX,
             alignY,
             wrap,
             layerId,
             color,
-            destination);
+            destination,
+            HasMTextFrame(mtext),
+            spacing,
+            mtext.Style);
     }
+
+    private static bool HasMTextFrame(MText mtext) =>
+        (mtext.BackgroundFillFlags & (
+            BackgroundFillFlags.UseBackgroundFillColor
+            | BackgroundFillFlags.UseDrawingWindowColor
+            | BackgroundFillFlags.TextFrame)) != 0;
 
     private static void CreateTextAxes(
         Vector3 normal,
@@ -831,9 +1204,9 @@ internal static class DisplayGeometryExtractor
     {
         float length = 0;
         CSMath.XYZ? previous = null;
-        foreach (CSMath.XYZ point in spline.ControlPoints.Count >= 2
-            ? spline.ControlPoints
-            : spline.FitPoints)
+        foreach (CSMath.XYZ point in (spline.ControlPoints?.Count ?? 0) >= 2
+            ? spline.ControlPoints!
+            : spline.FitPoints ?? [])
         {
             Vector3 current = CadMath.ToVector(point);
             if (previous is CSMath.XYZ last)
@@ -853,7 +1226,7 @@ internal static class DisplayGeometryExtractor
     {
         float length = 0;
         Vector3? previous = null;
-        foreach (CSMath.XYZ point in spline.ControlPoints)
+        foreach (CSMath.XYZ point in spline.ControlPoints ?? [])
         {
             if (!TryHatchPoint(
                     new CSMath.XYZ(point.X, point.Y, 0),
@@ -873,9 +1246,13 @@ internal static class DisplayGeometryExtractor
         return length;
     }
 
-    private static List<Vector3> ToVectors(IEnumerable<CSMath.XYZ> points)
+    private static List<Vector3> ToVectors(IEnumerable<CSMath.XYZ>? points)
     {
         var result = new List<Vector3>();
+        if (points is null)
+        {
+            return result;
+        }
         foreach (CSMath.XYZ point in points)
         {
             if (CadMath.TryWorldPoint(point, out Vector3 vector))
@@ -886,9 +1263,13 @@ internal static class DisplayGeometryExtractor
         return result;
     }
 
-    private static List<double> CopyDoubles(IEnumerable<double> values)
+    private static List<double> CopyDoubles(IEnumerable<double>? values)
     {
         var result = new List<double>();
+        if (values is null)
+        {
+            return result;
+        }
         foreach (double value in values)
         {
             result.Add(value);

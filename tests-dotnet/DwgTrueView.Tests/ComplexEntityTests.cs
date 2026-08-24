@@ -107,8 +107,10 @@ public sealed class ComplexEntityTests
         hatch.Paths.Add(path);
 
         var segments = new List<LocalSegment>();
-        Assert.True(DisplayGeometryExtractor.Append(hatch, 0, segments));
-        Assert.Equal(4, segments.Count);
+        var fills = new List<LocalTriangle>();
+        Assert.True(DisplayGeometryExtractor.Append(hatch, 0, segments, fills));
+        Assert.Empty(segments);
+        Assert.True(fills.Count >= 2);
         Assert.DoesNotContain(
             segments,
             segment =>

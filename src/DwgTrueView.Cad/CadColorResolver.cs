@@ -20,25 +20,38 @@ internal readonly record struct CadColorValue(CadColorKind Kind, int Value)
 
 internal static class CadColorResolver
 {
-    public const int ForegroundArgb = unchecked((int)0xFFF2F2F2);
+    /// <summary>
+    /// AutoCAD ACI 7 on a dark model-space canvas: white. Black is the
+    /// matching paper-space / light-canvas counterpart.
+    /// </summary>
+    public const int DefaultForegroundArgb = unchecked((int)0xFFFFFFFF);
+    public const int DefaultBackgroundArgb = unchecked((int)0xFF000000);
+    public const int ForegroundArgb = DefaultForegroundArgb;
 
     public static CadColorValue FromCadColor(Color color)
     {
-        if (color.IsByLayer || color.Index == 257)
+        try
+        {
+            if (color.IsByLayer || color.Index == 257)
+            {
+                return CadColorValue.ByLayer;
+            }
+            if (color.IsByBlock)
+            {
+                return CadColorValue.ByBlock;
+            }
+            if (color.IsTrueColor)
+            {
+                return CadColorValue.Rgb(color.R << 16 | color.G << 8 | color.B);
+            }
+            return color.Index is >= 1 and <= 255
+                ? CadColorValue.Aci(color.Index)
+                : CadColorValue.ByLayer;
+        }
+        catch (Exception)
         {
             return CadColorValue.ByLayer;
         }
-        if (color.IsByBlock)
-        {
-            return CadColorValue.ByBlock;
-        }
-        if (color.IsTrueColor)
-        {
-            return CadColorValue.Rgb(color.R << 16 | color.G << 8 | color.B);
-        }
-        return color.Index is >= 1 and <= 255
-            ? CadColorValue.Aci(color.Index)
-            : CadColorValue.ByLayer;
     }
 
     public static int Resolve(

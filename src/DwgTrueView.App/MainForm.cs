@@ -182,7 +182,7 @@ public sealed class MainForm : Form
             _statusText.Text = "Could not open drawing";
             MessageBox.Show(
                 this,
-                exception.Message,
+                FormatLoadError(exception),
                 "DWG/DXF load error",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -304,6 +304,16 @@ public sealed class MainForm : Form
         };
         button.Click += onClick;
         return button;
+    }
+
+    private static string FormatLoadError(Exception exception)
+    {
+        Exception current = exception is AggregateException aggregate
+            ? aggregate.Flatten().InnerExceptions.FirstOrDefault() ?? aggregate
+            : exception;
+        return string.IsNullOrWhiteSpace(current.InnerException?.Message)
+            ? current.Message
+            : $"{current.Message}{Environment.NewLine}{Environment.NewLine}{current.InnerException.Message}";
     }
 
     private sealed record LayerListItem(int Id, string Name)

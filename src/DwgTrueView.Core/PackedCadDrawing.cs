@@ -70,33 +70,50 @@ public sealed class PackedCadDrawing
         CadBounds2 bounds,
         double metersPerDrawingUnit,
         int sourceEntityCount,
-        int skippedEntityCount)
+        int skippedEntityCount,
+        CadVertex[]? fillVertices = null,
+        CadDrawRange[]? fillDrawRanges = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         ArgumentNullException.ThrowIfNull(vertices);
         ArgumentNullException.ThrowIfNull(layers);
         ArgumentNullException.ThrowIfNull(drawRanges);
+        fillVertices ??= [];
+        fillDrawRanges ??= [];
         if ((vertices.Length & 1) != 0)
         {
             throw new ArgumentException(
                 "A line-list buffer must contain an even number of vertices.",
                 nameof(vertices));
         }
+        if (fillVertices.Length % 3 != 0)
+        {
+            throw new ArgumentException(
+                "A triangle-list buffer must contain a multiple of three vertices.",
+                nameof(fillVertices));
+        }
 
         SourcePath = sourcePath;
         _vertices = vertices;
         _layers = layers;
         _drawRanges = drawRanges;
+        _fillVertices = fillVertices;
+        _fillDrawRanges = fillDrawRanges;
         Bounds = bounds;
         MetersPerDrawingUnit = metersPerDrawingUnit;
         SourceEntityCount = sourceEntityCount;
         SkippedEntityCount = skippedEntityCount;
     }
 
+    private readonly CadVertex[] _fillVertices;
+    private readonly CadDrawRange[] _fillDrawRanges;
+
     public string SourcePath { get; }
     public ReadOnlyMemory<CadVertex> Vertices => _vertices;
     public ReadOnlyMemory<CadLayer> Layers => _layers;
     public ReadOnlyMemory<CadDrawRange> DrawRanges => _drawRanges;
+    public ReadOnlyMemory<CadVertex> FillVertices => _fillVertices;
+    public ReadOnlyMemory<CadDrawRange> FillDrawRanges => _fillDrawRanges;
     public CadBounds2 Bounds { get; }
     public double MetersPerDrawingUnit { get; }
     public int SourceEntityCount { get; }
