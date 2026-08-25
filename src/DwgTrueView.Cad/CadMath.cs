@@ -14,6 +14,7 @@ internal static class CadMath
     private const float AxisTolerance = 1f / 64f;
     private const float OriginEpsilon = 1e-8f;
     private const float OriginRayHideDistance = 1f;
+    private const float PlausibleCoordinate = 1e9f;
 
     public static Matrix4x4 InsertTransform(
         Insert insert,
@@ -195,6 +196,16 @@ internal static class CadMath
 
     public static bool IsUsable(double x, double y, double z) =>
         double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(z);
+
+    /// <summary>
+    /// Reject NaN/Inf and runaway coordinates that would stretch across the
+    /// whole drawing when the real geometry lives elsewhere.
+    /// </summary>
+    public static bool IsPlausible(Vector3 point) =>
+        IsUsable(point)
+        && MathF.Abs(point.X) < PlausibleCoordinate
+        && MathF.Abs(point.Y) < PlausibleCoordinate
+        && MathF.Abs(point.Z) < PlausibleCoordinate;
 
     public static bool IsOrigin(Vector3 point) =>
         point.LengthSquared() <= OriginEpsilon;

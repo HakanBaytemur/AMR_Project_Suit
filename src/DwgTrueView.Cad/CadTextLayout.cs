@@ -1,13 +1,37 @@
 namespace DwgTrueView.Cad;
 
 /// <summary>
-/// DXF group-41 MTEXT wrapping. Width 0 means unconstrained: keep authoring
-/// breaks (<c>\P</c>) and never insert extra line breaks.
+/// DXF group-41 MTEXT wrapping. Width 0, undefined, or smaller than a single
+/// glyph means unconstrained: keep authoring breaks (<c>\P</c>) and never
+/// insert extra line breaks. That prevents multi-digit numbers such as
+/// <c>158</c> from stacking into one character per line.
 /// </summary>
 internal static class CadTextLayout
 {
     public const int MaxLines = 64;
     public const int MaxCharacters = 4096;
+
+    public static bool IsUnconstrained(float wrapWidth, float minGlyphWidth)
+    {
+        if (!float.IsFinite(wrapWidth) || wrapWidth <= 1e-6f)
+        {
+            return true;
+        }
+        return minGlyphWidth > 1e-6f && wrapWidth < minGlyphWidth;
+    }
+
+    public static float EffectiveWrapWidth(
+        float wrapWidth,
+        IReadOnlyList<string> lines,
+        Func<string, float> measure)
+    {
+        if (!float.IsFinite(wrapWidth) || wrapWidth <= 1e-6f)
+        {
+            return 0f;
+        }
+        float minGlyph = MinGlyphWidth(lines, measure);
+        return IsUnconstrained(wrapWidth, minGlyph) ? 0f : wrapWidth;
+    }
 
     public static string[] Wrap(
         IReadOnlyList<string> lines,
@@ -16,7 +40,8 @@ internal static class CadTextLayout
     {
         var result = new List<string>(Math.Min(lines.Count, MaxLines));
         int remaining = MaxCharacters;
-        bool wrap = wrapWidth > 1e-6f;
+        float effective = EffectiveWrapWidth(wrapWidth, lines, measure);
+        bool wrap = effective > 1e-6f;
 
         foreach (string raw in lines)
         {
@@ -39,10 +64,10 @@ internal static class CadTextLayout
             int offset = 0;
             while (offset < line.Length && result.Count < MaxLines && remaining > 0)
             {
-                int take = Fit(line, offset, wrapWidth, remaining, measure);
+                int take = Fit(line, offset, effective, remaining, measure);
                 if (take <= 0)
                 {
-                    take = Math.Min(1, Math.Min(remaining, line.Length - offset));
+                    take = Math.Min(remaining, line.Length - offset);
                 }
                 result.Add(line.Substring(offset, take).TrimEnd());
                 remaining -= take;
@@ -54,6 +79,26 @@ internal static class CadTextLayout
             }
         }
         return result.ToArray();
+    }
+
+    private static float MinGlyphWidth(IReadOnlyList<string> lines, Func<string, float> measure)
+    {
+        foreach (string raw in lines)
+        {
+            foreach (char character in raw ?? string.Empty)
+            {
+                if (char.IsWhiteSpace(character))
+                {
+                    continue;
+                }
+                float width = measure(character.ToString());
+                if (float.IsFinite(width) && width > 0)
+                {
+                    return width;
+                }
+            }
+        }
+        return 0f;
     }
 
     private static int Fit(
@@ -68,6 +113,14 @@ internal static class CadTextLayout
         {
             return 0;
         }
+
+        float first = measure(line.Substring(offset, 1));
+        if (!float.IsFinite(first) || first > wrapWidth)
+        {
+            // A box narrower than one glyph is not a real wrap column.
+            return available;
+        }
+
         int low = 1;
         int high = available;
         int fit = 1;
@@ -75,7 +128,7 @@ internal static class CadTextLayout
         {
             int mid = (low + high) / 2;
             float width = measure(line.Substring(offset, mid));
-            if (width <= wrapWidth || mid == 1)
+            if (width <= wrapWidth)
             {
                 fit = mid;
                 low = mid + 1;

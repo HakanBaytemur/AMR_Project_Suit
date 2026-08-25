@@ -248,6 +248,53 @@ public sealed class ComplexEntityTests
         Assert.Empty(segments);
     }
 
+    [Fact]
+    public void HatchInsideInsertedBlockFollowsInsertTransform()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.dxf");
+        try
+        {
+            var document = new CadDocument();
+            var block = new BlockRecord("HATCHBLK");
+            document.BlockRecords.Add(block);
+            var hatch = new Hatch { IsSolid = true };
+            var loop = new Hatch.BoundaryPath();
+            loop.Edges.Add(new Hatch.BoundaryPath.Polyline(
+                [
+                    new XYZ(0, 0, 0),
+                    new XYZ(10, 0, 0),
+                    new XYZ(10, 6, 0),
+                    new XYZ(0, 6, 0),
+                ],
+                isClosed: true));
+            hatch.Paths.Add(loop);
+            block.Entities.Add(hatch);
+            document.Entities.Add(new Insert(block)
+            {
+                InsertPoint = new XYZ(200, 80, 0),
+            });
+
+            using (var writer = new DxfWriter(path, document))
+            {
+                writer.Write();
+            }
+
+            PackedCadDrawing drawing = new ShallowCadReader().Read(path);
+            CadVertex[] fills = drawing.FillVertices.ToArray();
+            Assert.True(fills.Length >= 6);
+            Assert.Contains(
+                fills,
+                vertex => MathF.Abs(vertex.X - 205) < 10 && MathF.Abs(vertex.Y - 83) < 10);
+            Assert.DoesNotContain(
+                fills,
+                vertex => MathF.Abs(vertex.X) < 0.5f && MathF.Abs(vertex.Y) < 0.5f);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static void AssertOnEllipse(
         Vector3 point,
         Vector3 center,

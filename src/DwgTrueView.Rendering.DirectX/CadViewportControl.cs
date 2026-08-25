@@ -26,7 +26,7 @@ public sealed class WorldCursorEventArgs(Vector2 world) : EventArgs
 /// </summary>
 public sealed class CadViewportControl : Control
 {
-    private const int MaximumGridVertices = 4096;
+    private const int MaximumGridVertices = ViewportOverlay.MaxVertices;
     private const string ShaderSource = """
         cbuffer CameraBuffer : register(b0)
         {
@@ -81,6 +81,8 @@ public sealed class CadViewportControl : Control
     private bool _panning;
     private Point _lastMouse;
     private int _gridVertexCount;
+    private int _accentVertexStart;
+    private int _accentVertexCount;
     private bool _disposed;
     private bool _gridVisible = true;
 
@@ -106,7 +108,7 @@ public sealed class CadViewportControl : Control
         _renderTimer.Start();
     }
 
-    public ViewCamera2D Camera { get; } = new();
+    public ViewCamera2D Camera { get; private set; } = new();
     public PackedCadDrawing? Drawing => _drawing;
 
     public bool GridVisible
@@ -129,14 +131,40 @@ public sealed class CadViewportControl : Control
 
     public void LoadDrawing(PackedCadDrawing? drawing)
     {
+        PresentSession(
+            drawing,
+            new ViewCamera2D(),
+            drawing?.Layers.Span
+                .ToArray()
+                .Select(static layer => layer.IsInitiallyVisible)
+                .ToArray()
+                ?? [],
+            fitExtents: drawing is not null);
+    }
+
+    /// <summary>
+    /// Swap the on-screen session without re-parsing. GPU buffers are rebuilt
+    /// from the already-packed drawing; camera and layer flags are the tab's.
+    /// </summary>
+    public void PresentSession(
+        PackedCadDrawing? drawing,
+        ViewCamera2D camera,
+        bool[] layerVisibility,
+        bool fitExtents)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        ArgumentNullException.ThrowIfNull(layerVisibility);
+        Camera = camera;
         _drawing = drawing;
-        _layerVisibility = drawing?.Layers.Span
-            .ToArray()
-            .Select(static layer => layer.IsInitiallyVisible)
-            .ToArray()
-            ?? [];
+        _layerVisibility = layerVisibility;
         UploadCadBuffer();
-        ZoomExtents();
+        if (fitExtents)
+        {
+            ZoomExtents();
+            return;
+        }
+        _gridDirty = true;
+        RequestFrame();
     }
 
     public void SetLayerVisible(int layerId, bool visible)
@@ -496,7 +524,7 @@ public sealed class CadViewportControl : Control
                 1);
             _context.ClearRenderTargetView(
                 _renderTarget,
-                new RawColor4(30 / 255f, 30 / 255f, 30 / 255f, 1));
+                new RawColor4(32 / 255f, 32 / 255f, 32 / 255f, 1));
             _context.InputAssembler.InputLayout = _inputLayout;
             _context.InputAssembler.PrimitiveTopology = PrimitiveTopology.LineList;
             _context.VertexShader.Set(_vertexShader);
@@ -520,21 +548,15 @@ public sealed class CadViewportControl : Control
                 halfHeight);
             _context.UpdateSubresource(ref camera, _cameraBuffer);
 
-            if (GridVisible && _gridBuffer is not null)
+            if (_gridBuffer is not null)
             {
                 if (_gridDirty)
                 {
                     UpdateGridBuffer();
                 }
-                if (_gridVertexCount > 0)
+                if (GridVisible)
                 {
-                    _context.InputAssembler.SetVertexBuffers(
-                        0,
-                        new VertexBufferBinding(
-                            _gridBuffer,
-                            CadVertex.SizeInBytes,
-                            0));
-                    _context.Draw(_gridVertexCount, 0);
+                    DrawOverlayRange(0, _gridVertexCount);
                 }
             }
 
@@ -581,6 +603,11 @@ public sealed class CadViewportControl : Control
                     }
                 }
             }
+
+            if (_gridBuffer is not null)
+            {
+                DrawOverlayRange(_accentVertexStart, _accentVertexCount);
+            }
             _swapChain.Present(1, PresentFlags.None);
         }
         catch (SharpDXException exception)
@@ -590,37 +617,45 @@ public sealed class CadViewportControl : Control
         }
     }
 
+    private void DrawOverlayRange(int startVertex, int vertexCount)
+    {
+        if (_context is null || _gridBuffer is null || vertexCount <= 0)
+        {
+            return;
+        }
+        _context.InputAssembler.PrimitiveTopology = PrimitiveTopology.LineList;
+        _context.InputAssembler.SetVertexBuffers(
+            0,
+            new VertexBufferBinding(
+                _gridBuffer,
+                CadVertex.SizeInBytes,
+                0));
+        _context.Draw(vertexCount, startVertex);
+    }
+
     private void UpdateGridBuffer()
     {
         _gridDirty = false;
         _gridVertexCount = 0;
+        _accentVertexStart = 0;
+        _accentVertexCount = 0;
         if (_context is null || _gridBuffer is null)
         {
             return;
         }
-        float halfWidth = Camera.UnitsPerPixel * ClientSize.Width * 0.5f;
-        float halfHeight = Camera.UnitsPerPixel * ClientSize.Height * 0.5f;
-        float left = Camera.Center.X - halfWidth;
-        float right = Camera.Center.X + halfWidth;
-        float bottom = Camera.Center.Y - halfHeight;
-        float top = Camera.Center.Y + halfHeight;
-        float step = NiceGridStep(Camera.UnitsPerPixel * 80);
-        uint color = CadVertex.FromArgb(unchecked((int)0xFF333941));
-        float firstX = MathF.Floor(left / step) * step;
-        for (float x = firstX;
-             x <= right && _gridVertexCount + 2 <= MaximumGridVertices;
-             x += step)
+        ViewportOverlay.Counts counts = ViewportOverlay.Write(
+            _gridVertices,
+            Camera.Center,
+            Camera.UnitsPerPixel,
+            ClientSize.Width,
+            ClientSize.Height);
+        _gridVertexCount = counts.GridVertices;
+        _accentVertexStart = counts.GridVertices;
+        _accentVertexCount = counts.AccentVertices;
+        int total = counts.Total;
+        if (total <= 0)
         {
-            _gridVertices[_gridVertexCount++] = new CadVertex(x, bottom, color);
-            _gridVertices[_gridVertexCount++] = new CadVertex(x, top, color);
-        }
-        float firstY = MathF.Floor(bottom / step) * step;
-        for (float y = firstY;
-             y <= top && _gridVertexCount + 2 <= MaximumGridVertices;
-             y += step)
-        {
-            _gridVertices[_gridVertexCount++] = new CadVertex(left, y, color);
-            _gridVertices[_gridVertexCount++] = new CadVertex(right, y, color);
+            return;
         }
 
         DataBox box = _context.MapSubresource(
@@ -628,23 +663,8 @@ public sealed class CadViewportControl : Control
             0,
             MapMode.WriteDiscard,
             SharpDX.Direct3D11.MapFlags.None);
-        Utilities.Write(box.DataPointer, _gridVertices, 0, _gridVertexCount);
+        Utilities.Write(box.DataPointer, _gridVertices, 0, total);
         _context.UnmapSubresource(_gridBuffer, 0);
-    }
-
-    private static float NiceGridStep(float target)
-    {
-        target = Math.Max(target, 1e-9f);
-        float magnitude = MathF.Pow(10, MathF.Floor(MathF.Log10(target)));
-        float normalized = target / magnitude;
-        float multiplier = normalized <= 1
-            ? 1
-            : normalized <= 2
-                ? 2
-                : normalized <= 5
-                    ? 5
-                    : 10;
-        return magnitude * multiplier;
     }
 
     private void TryRecoverDevice()

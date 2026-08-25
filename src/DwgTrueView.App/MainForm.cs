@@ -8,15 +8,19 @@ public sealed class MainForm : Form
 {
     private readonly ShallowCadReader _reader = new();
     private readonly CadViewportControl _viewport = new();
-    private readonly CheckedListBox _layers = new();
+    private readonly WorkspaceTabCollection _workspace = new();
+    private readonly WorkspaceTabStrip _tabs = new();
+    private readonly ViewCamera2D _emptyCamera = new();
     private readonly ToolStripButton _openButton;
     private readonly ToolStripButton _zoomExtentsButton;
     private readonly ToolStripButton _gridButton;
+    private readonly ToolStripButton _layersButton;
     private readonly ToolStripStatusLabel _statusText = new();
     private readonly ToolStripStatusLabel _coordinates = new();
     private readonly ToolStripProgressBar _progress = new();
-    private CancellationTokenSource? _loadCancellation;
-    private bool _updatingLayers;
+    private LayerPropertiesForm? _layerForm;
+    private CancellationTokenSource _shutdown = new();
+    private int _loadsInFlight;
 
     public MainForm()
     {
@@ -41,44 +45,28 @@ public sealed class MainForm : Form
         };
         _openButton = CreateToolbarButton("Open DWG/DXF", OnOpenClicked);
         _zoomExtentsButton = CreateToolbarButton("Zoom Extents", (_, _) => _viewport.ZoomExtents());
-        _gridButton = CreateToolbarButton(
-            "Grid",
-            (sender, _) => _viewport.GridVisible =
-                ((ToolStripButton)sender!).Checked);
+        _gridButton = CreateToolbarButton("Grid", static (_, _) => { });
         _gridButton.CheckOnClick = true;
         _gridButton.Checked = true;
+        _gridButton.CheckedChanged += (_, _) => _viewport.GridVisible = _gridButton.Checked;
+        _layersButton = CreateToolbarButton("Layer Properties", OnLayerPropertiesClicked);
         toolbar.Items.AddRange(
         [
             _openButton,
             new ToolStripSeparator(),
             _zoomExtentsButton,
             _gridButton,
+            _layersButton,
         ]);
 
-        var layerPanel = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(37, 39, 43),
-            Padding = new Padding(10),
-        };
-        var layerHeader = new Label
-        {
-            Text = "CAD Layers",
-            Dock = DockStyle.Top,
-            Height = 42,
-            Font = new Font("Segoe UI Semibold", 12f),
-            ForeColor = Color.WhiteSmoke,
-            TextAlign = ContentAlignment.MiddleLeft,
-        };
-        _layers.Dock = DockStyle.Fill;
-        _layers.BackColor = Color.FromArgb(30, 30, 30);
-        _layers.ForeColor = Color.Gainsboro;
-        _layers.BorderStyle = BorderStyle.None;
-        _layers.CheckOnClick = true;
-        _layers.IntegralHeight = false;
-        _layers.ItemCheck += OnLayerItemCheck;
-        layerPanel.Controls.Add(_layers);
-        layerPanel.Controls.Add(layerHeader);
+        _tabs.TabSelected += OnTabSelected;
+        _tabs.TabClosed += OnTabClosed;
+        _tabs.TabMoved += OnTabMoved;
+        _tabs.NewTabClicked += OnOpenClicked;
+        _tabs.DragEnter += OnDragEnter;
+        _tabs.DragDrop += OnDragDrop;
+        _workspace.Changed += (_, _) =>
+            _tabs.Bind(_workspace.Tabs, _workspace.Active?.Id);
 
         _viewport.Dock = DockStyle.Fill;
         _viewport.Cursor = Cursors.Cross;
@@ -86,17 +74,6 @@ public sealed class MainForm : Form
             _coordinates.Text = $"X {e.World.X:0.###}    Y {e.World.Y:0.###}";
         _viewport.RenderFailed += exception =>
             _statusText.Text = $"DirectX error: {exception.Message}";
-
-        var split = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            FixedPanel = FixedPanel.Panel1,
-            SplitterDistance = 250,
-            SplitterWidth = 1,
-            BackColor = Color.FromArgb(70, 70, 70),
-        };
-        split.Panel1.Controls.Add(layerPanel);
-        split.Panel2.Controls.Add(_viewport);
 
         var status = new StatusStrip
         {
@@ -115,19 +92,24 @@ public sealed class MainForm : Form
         _progress.Width = 150;
         status.Items.AddRange([_statusText, _progress, _coordinates]);
 
-        Controls.Add(split);
-        Controls.Add(toolbar);
+        Controls.Add(_viewport);
         Controls.Add(status);
-        toolbar.Dock = DockStyle.Top;
+        Controls.Add(_tabs);
+        Controls.Add(toolbar);
         status.Dock = DockStyle.Bottom;
+        _tabs.Dock = DockStyle.Top;
+        toolbar.Dock = DockStyle.Top;
 
         KeyDown += OnFormKeyDown;
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
         FormClosing += (_, _) =>
         {
-            _loadCancellation?.Cancel();
-            _loadCancellation?.Dispose();
+            _shutdown.Cancel();
+            if (_layerForm is { IsDisposed: false })
+            {
+                _layerForm.Close();
+            }
         };
     }
 
@@ -144,10 +126,9 @@ public sealed class MainForm : Form
             return;
         }
 
-        _loadCancellation?.Cancel();
-        _loadCancellation?.Dispose();
-        _loadCancellation = new CancellationTokenSource();
-        CancellationToken cancellationToken = _loadCancellation.Token;
+        CancellationToken cancellationToken = _shutdown.IsCancellationRequested
+            ? new CancellationToken(canceled: true)
+            : _shutdown.Token;
         SetLoading(true);
         _statusText.Text = $"Opening {Path.GetFileName(path)}…";
         var progress = new Progress<CadLoadProgress>(
@@ -165,13 +146,23 @@ public sealed class MainForm : Form
                 progress: progress,
                 cancellationToken: cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            _viewport.LoadDrawing(drawing);
-            PopulateLayers(drawing);
-            Text = $"DWG TrueView Lite V2 — {Path.GetFileName(path)}";
-            _statusText.Text =
-                $"{drawing.SegmentCount:N0} segments  |  "
-                + $"{drawing.VertexBytes / 1024d / 1024d:N1} MiB GPU vertices  |  "
-                + $"{drawing.SkippedEntityCount:N0} unsupported/hidden";
+            if (IsDisposed)
+            {
+                return;
+            }
+            void commit()
+            {
+                _workspace.Add(drawing);
+                PresentActive(fitExtents: true);
+            }
+            if (InvokeRequired)
+            {
+                Invoke(commit);
+            }
+            else
+            {
+                commit();
+            }
         }
         catch (OperationCanceledException)
         {
@@ -193,6 +184,52 @@ public sealed class MainForm : Form
         }
     }
 
+    private void PresentActive(bool fitExtents)
+    {
+        if (_workspace.Active is { } tab)
+        {
+            _viewport.PresentSession(
+                tab.Drawing,
+                tab.Camera,
+                tab.LayerVisibility,
+                fitExtents);
+            BindLayers(tab);
+            Text = $"DWG TrueView Lite V2 — {tab.FileName}";
+            PackedCadDrawing drawing = tab.Drawing;
+            _statusText.Text =
+                $"{drawing.SegmentCount:N0} segments  |  "
+                + $"{drawing.VertexBytes / 1024d / 1024d:N1} MiB GPU vertices  |  "
+                + $"{drawing.SkippedEntityCount:N0} unsupported/hidden";
+            return;
+        }
+
+        _viewport.PresentSession(null, _emptyCamera, [], fitExtents: false);
+        BindLayers(null);
+        Text = "DWG TrueView Lite V2";
+        _statusText.Text = "Ready — wheel zoom, middle-button pan, Home/F zoom extents";
+    }
+
+    private void OnTabSelected(Guid id)
+    {
+        if (_workspace.Activate(id))
+        {
+            PresentActive(fitExtents: false);
+        }
+    }
+
+    private void OnTabClosed(Guid id)
+    {
+        if (_workspace.Close(id))
+        {
+            PresentActive(fitExtents: false);
+        }
+    }
+
+    private void OnTabMoved(Guid id, int index)
+    {
+        _workspace.Move(id, index);
+    }
+
     private void OnOpenClicked(object? sender, EventArgs e)
     {
         using var dialog = new OpenFileDialog
@@ -200,46 +237,94 @@ public sealed class MainForm : Form
             Title = "Open DWG or DXF",
             Filter = "AutoCAD drawings (*.dwg;*.dxf)|*.dwg;*.dxf|DWG (*.dwg)|*.dwg|DXF (*.dxf)|*.dxf",
             CheckFileExists = true,
-            Multiselect = false,
+            Multiselect = true,
         };
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            _ = OpenPathAsync(dialog.FileName);
-        }
-    }
-
-    private void PopulateLayers(PackedCadDrawing drawing)
-    {
-        _updatingLayers = true;
-        _layers.BeginUpdate();
-        _layers.Items.Clear();
-        ReadOnlySpan<CadLayer> layers = drawing.Layers.Span;
-        for (int index = 0; index < layers.Length; index++)
-        {
-            CadLayer layer = layers[index];
-            int itemIndex = _layers.Items.Add(new LayerListItem(layer.Id, layer.Name));
-            _layers.SetItemChecked(itemIndex, layer.IsInitiallyVisible);
-        }
-        _layers.EndUpdate();
-        _updatingLayers = false;
-    }
-
-    private void OnLayerItemCheck(object? sender, ItemCheckEventArgs e)
-    {
-        if (_updatingLayers || _layers.Items[e.Index] is not LayerListItem item)
+        if (dialog.ShowDialog(this) != DialogResult.OK)
         {
             return;
         }
-        _viewport.SetLayerVisible(item.Id, e.NewValue == CheckState.Checked);
+        foreach (string path in dialog.FileNames)
+        {
+            _ = OpenPathAsync(path);
+        }
+    }
+
+    private void BindLayers(DrawingWorkspace? tab)
+    {
+        if (_layerForm is not { IsDisposed: false })
+        {
+            return;
+        }
+        if (tab is null)
+        {
+            _layerForm.ClearLayers();
+            return;
+        }
+        _layerForm.Bind(tab.Drawing.Layers.ToArray(), tab.LayerVisibility);
+    }
+
+    private void OnLayerPropertiesClicked(object? sender, EventArgs e)
+    {
+        LayerPropertiesForm form = EnsureLayerForm();
+        if (form.Visible)
+        {
+            form.Hide();
+            _layersButton.Checked = false;
+            return;
+        }
+        if (form.WindowState == FormWindowState.Minimized)
+        {
+            form.WindowState = FormWindowState.Normal;
+        }
+        BindLayers(_workspace.Active);
+        form.Show(this);
+        form.Activate();
+        _layersButton.Checked = true;
+    }
+
+    private LayerPropertiesForm EnsureLayerForm()
+    {
+        if (_layerForm is { IsDisposed: false })
+        {
+            return _layerForm;
+        }
+        var form = new LayerPropertiesForm();
+        form.VisibilityChanged += (layerId, visible) =>
+            _viewport.SetLayerVisible(layerId, visible);
+        form.FormClosed += (_, _) =>
+        {
+            _layersButton.Checked = false;
+            _layerForm = null;
+        };
+        form.VisibleChanged += (_, _) =>
+        {
+            if (_layerForm is { IsDisposed: false })
+            {
+                _layersButton.Checked = _layerForm.Visible;
+            }
+        };
+        _layerForm = form;
+        BindLayers(_workspace.Active);
+        Point origin = _viewport.IsHandleCreated
+            ? _viewport.PointToScreen(new Point(24, 24))
+            : PointToScreen(new Point(24, 80));
+        form.Location = origin;
+        return form;
     }
 
     private void SetLoading(bool loading)
     {
-        _openButton.Enabled = !loading;
-        _zoomExtentsButton.Enabled = !loading;
-        _layers.Enabled = !loading;
-        _progress.Visible = loading;
-        if (!loading)
+        if (loading)
+        {
+            _loadsInFlight++;
+        }
+        else
+        {
+            _loadsInFlight = Math.Max(0, _loadsInFlight - 1);
+        }
+        bool busy = _loadsInFlight > 0;
+        _progress.Visible = busy;
+        if (!busy)
         {
             _progress.Value = 0;
         }
@@ -252,6 +337,14 @@ public sealed class MainForm : Form
             OnOpenClicked(this, EventArgs.Empty);
             e.Handled = true;
         }
+        else if (e.Control && e.KeyCode == Keys.W)
+        {
+            if (_workspace.Active is { } tab)
+            {
+                OnTabClosed(tab.Id);
+            }
+            e.Handled = true;
+        }
         else if (e.KeyCode is Keys.Home or Keys.F)
         {
             _viewport.ZoomExtents();
@@ -259,35 +352,48 @@ public sealed class MainForm : Form
         }
     }
 
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData is (Keys.Control | Keys.Tab) or (Keys.Control | Keys.Shift | Keys.Tab))
+        {
+            int delta = keyData.HasFlag(Keys.Shift) ? -1 : 1;
+            if (_workspace.ActivateRelative(delta))
+            {
+                PresentActive(fitExtents: false);
+            }
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     private void OnDragEnter(object? sender, DragEventArgs e)
     {
-        e.Effect = HasCadFile(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Effect = CadFiles(e.Data).Any() ? DragDropEffects.Copy : DragDropEffects.None;
     }
 
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
-        string? path = FirstCadFile(e.Data);
-        if (path is not null)
+        foreach (string path in CadFiles(e.Data))
         {
             _ = OpenPathAsync(path);
         }
     }
 
-    private static bool HasCadFile(IDataObject? data) => FirstCadFile(data) is not null;
-
-    private static string? FirstCadFile(IDataObject? data)
+    private static IEnumerable<string> CadFiles(IDataObject? data)
     {
         if (data?.GetData(DataFormats.FileDrop) is not string[] files)
         {
-            return null;
+            yield break;
         }
-        return files.FirstOrDefault(
-            path =>
+        foreach (string path in files)
+        {
+            string extension = Path.GetExtension(path);
+            if (extension.Equals(".dwg", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".dxf", StringComparison.OrdinalIgnoreCase))
             {
-                string extension = Path.GetExtension(path);
-                return extension.Equals(".dwg", StringComparison.OrdinalIgnoreCase)
-                    || extension.Equals(".dxf", StringComparison.OrdinalIgnoreCase);
-            });
+                yield return path;
+            }
+        }
     }
 
     private static ToolStripButton CreateToolbarButton(
@@ -314,11 +420,6 @@ public sealed class MainForm : Form
         return string.IsNullOrWhiteSpace(current.InnerException?.Message)
             ? current.Message
             : $"{current.Message}{Environment.NewLine}{Environment.NewLine}{current.InnerException.Message}";
-    }
-
-    private sealed record LayerListItem(int Id, string Name)
-    {
-        public override string ToString() => Name;
     }
 
     private sealed class DarkToolStripRenderer : ToolStripProfessionalRenderer

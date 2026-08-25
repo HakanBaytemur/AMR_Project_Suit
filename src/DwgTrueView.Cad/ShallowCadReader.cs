@@ -110,9 +110,8 @@ public sealed class ShallowCadReader
 
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Report(new CadLoadProgress(45, "Flattening display geometry"));
-        Entity[] modelEntities = document.Entities?
-            .Where(static entity => entity is not null)
-            .ToArray() ?? [];
+        BlockRecord? modelSpace = TryModelSpace(document);
+        Entity[] modelEntities = CollectModelSpaceEntities(document, modelSpace);
         int processed = 0;
         var partitions = new ConcurrentBag<ExtractionPartition>();
         Parallel.ForEach(
@@ -126,6 +125,7 @@ public sealed class ShallowCadReader
                     cancellationToken.ThrowIfCancellationRequested();
                     FlattenModelEntity(
                         entity,
+                        modelSpace,
                         sourceBlocks,
                         blockIds,
                         templates,
@@ -463,6 +463,8 @@ public sealed class ShallowCadReader
         if (!IsFinite(start)
             || !IsFinite(end)
             || start == end
+            || !CadMath.IsPlausible(start3)
+            || !CadMath.IsPlausible(end3)
             || CadMath.IsCorruptOriginRay(start3, end3))
         {
             destination.Skipped++;
@@ -495,9 +497,9 @@ public sealed class ShallowCadReader
         Vector3 a3 = Vector3.Transform(triangle.A, transform);
         Vector3 b3 = Vector3.Transform(triangle.B, transform);
         Vector3 c3 = Vector3.Transform(triangle.C, transform);
-        if (!CadMath.IsUsable(a3)
-            || !CadMath.IsUsable(b3)
-            || !CadMath.IsUsable(c3))
+        if (!CadMath.IsPlausible(a3)
+            || !CadMath.IsPlausible(b3)
+            || !CadMath.IsPlausible(c3))
         {
             destination.Skipped++;
             return;
@@ -717,6 +719,7 @@ public sealed class ShallowCadReader
 
     private static void FlattenModelEntity(
         Entity entity,
+        BlockRecord? modelSpace,
         IReadOnlyList<BlockRecord> sourceBlocks,
         IReadOnlyDictionary<string, int> blockIds,
         IReadOnlyList<BlockTemplate> templates,
@@ -728,7 +731,10 @@ public sealed class ShallowCadReader
         ExtractionPartition partition,
         CancellationToken cancellationToken)
     {
-        if (entity is null || entity.IsInvisible || entity is AttributeDefinition)
+        if (entity is null
+            || entity.IsInvisible
+            || entity is AttributeDefinition
+            || !BelongsToModelSpace(entity, modelSpace))
         {
             partition.Skipped++;
             return;
@@ -888,6 +894,18 @@ public sealed class ShallowCadReader
                     zeroLayerId,
                     partition);
             }
+            foreach (LocalTriangle triangle in partition.ScratchFills)
+            {
+                AppendResolvedTriangle(
+                    triangle,
+                    Matrix4x4.Identity,
+                    layerId,
+                    layerId,
+                    CadColorValue.Rgb(CadColorResolver.ForegroundArgb & 0xFFFFFF),
+                    layers,
+                    zeroLayerId,
+                    partition);
+            }
         }
     }
 
@@ -912,6 +930,63 @@ public sealed class ShallowCadReader
                 CadColorValue.Aci(7),
                 CadColorResolver.ForegroundArgb,
                 true);
+
+    private static BlockRecord? TryModelSpace(CadDocument document)
+    {
+        try
+        {
+            return document.ModelSpace;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static Entity[] CollectModelSpaceEntities(
+        CadDocument document,
+        BlockRecord? modelSpace)
+    {
+        try
+        {
+            CadObjectCollection<Entity>? source = modelSpace?.Entities ?? document.Entities;
+            if (source is null)
+            {
+                return [];
+            }
+            return source
+                .Where(entity => entity is not null && BelongsToModelSpace(entity, modelSpace))
+                .ToArray();
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+    }
+
+    private static bool BelongsToModelSpace(Entity entity, BlockRecord? modelSpace)
+    {
+        try
+        {
+            if (entity.Owner is BlockRecord owner)
+            {
+                if (modelSpace is not null && ReferenceEquals(owner, modelSpace))
+                {
+                    return true;
+                }
+                return IsModelSpaceName(owner.Name);
+            }
+            return true;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsModelSpaceName(string? name) =>
+        !string.IsNullOrWhiteSpace(name)
+        && name.Contains("MODEL_SPACE", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasVisibilityController(BlockRecord? block)
     {
@@ -940,7 +1015,7 @@ public sealed class ShallowCadReader
     }
 
     private static bool IsLayoutBlock(string name) =>
-        name.Contains("MODEL_SPACE", StringComparison.OrdinalIgnoreCase)
+        IsModelSpaceName(name)
         || name.Contains("PAPER_SPACE", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsFinite(Vector2 point) =>

@@ -32,7 +32,8 @@ internal static class StrokeFont
         List<LocalSegment> destination,
         bool drawFrame = false,
         float lineSpacingFactor = 1f,
-        ACadSharp.Tables.TextStyle? style = null)
+        ACadSharp.Tables.TextStyle? style = null,
+        List<LocalTriangle>? fills = null)
     {
         if (height <= 1e-6f)
         {
@@ -54,7 +55,8 @@ internal static class StrokeFont
                 style,
                 layerId,
                 color,
-                destination))
+                destination,
+                fills))
         {
             if (drawFrame)
             {
@@ -137,7 +139,7 @@ internal static class StrokeFont
             float x = cursorX;
             foreach (char raw in line)
             {
-                char key = Normalize(raw);
+                char key = CadTextCodec.MapGlyph(raw);
                 if (key == ' ')
                 {
                     x += Advance * height * widthFactor;
@@ -178,7 +180,7 @@ internal static class StrokeFont
         }
     }
 
-    internal static char NormalizePublic(char value) => Normalize(value);
+    internal static char NormalizePublic(char value) => CadTextCodec.MapGlyph(value);
 
     public static float Measure(string text)
     {
@@ -312,24 +314,6 @@ internal static class StrokeFont
         float x,
         float y) =>
         origin + axisX * x + axisY * y;
-
-    private static char Normalize(char value)
-    {
-        if (value <= 127)
-        {
-            return value;
-        }
-        return char.ToUpperInvariant(value) switch
-        {
-            'Ç' => 'C',
-            'Ğ' => 'G',
-            'İ' or 'I' => 'I',
-            'Ö' => 'O',
-            'Ş' => 'S',
-            'Ü' => 'U',
-            _ => value,
-        };
-    }
 
     private static void Add(
         List<LocalSegment> destination,

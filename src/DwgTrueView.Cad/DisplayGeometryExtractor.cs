@@ -81,7 +81,7 @@ internal static class DisplayGeometryExtractor
                 {
                     return true;
                 }
-                AppendText(attrib, layerId, color, destination);
+                AppendText(attrib, layerId, color, destination, fills);
                 return true;
             case ACadSharp.Entities.Line line:
                 if (CadMath.TryWorldPoint(line.StartPoint, out Vector3 lineStart)
@@ -145,10 +145,13 @@ internal static class DisplayGeometryExtractor
             case Dimension:
                 return true;
             case MText mtext:
-                AppendMText(mtext, layerId, color, destination);
+                AppendMText(mtext, layerId, color, destination, fills);
                 return true;
             case TextEntity text:
-                AppendText(text, layerId, color, destination);
+                AppendText(text, layerId, color, destination, fills);
+                return true;
+            case Region region:
+                RegionBoundaryEvaluator.Append(region, layerId, color, destination, fills);
                 return true;
             case Ray:
             case XLine:
@@ -497,7 +500,8 @@ internal static class DisplayGeometryExtractor
         bool fill = fills is not null
             && (hatch.IsSolid
                 || hatch.PatternType == HatchPatternType.SolidFill
-                || hatch.GradientColor?.Enabled == true);
+                || hatch.GradientColor?.Enabled == true
+                || string.Equals(hatch.Pattern?.Name, "SOLID", StringComparison.OrdinalIgnoreCase));
         var loops = fill ? new List<List<Vector3>>() : null;
 
         foreach (Hatch.BoundaryPath path in hatch.Paths)
@@ -591,6 +595,7 @@ internal static class DisplayGeometryExtractor
         {
             return;
         }
+        int before = fills.Count;
         ResolveHatchFillColors(hatch, color, out CadColorValue colorA, out CadColorValue colorB);
         IEnumerable<List<Vector3>> selected = hatch.Style == HatchStyleType.Outer
             && loops.Count > 1
@@ -599,6 +604,16 @@ internal static class DisplayGeometryExtractor
         foreach (List<Vector3> loop in selected)
         {
             HatchFillTessellator.Append(loop, layerId, colorA, colorB, colorA, fills);
+        }
+        if (fills.Count == before)
+        {
+            foreach (List<Vector3> loop in loops)
+            {
+                for (int i = 0; i < loop.Count; i++)
+                {
+                    Add(destination, loop[i], loop[(i + 1) % loop.Count], layerId, color);
+                }
+            }
         }
     }
 
@@ -650,11 +665,38 @@ internal static class DisplayGeometryExtractor
         }
         foreach (LocalSegment segment in edges)
         {
+            if (!CadMath.IsPlausible(segment.Start) || !CadMath.IsPlausible(segment.End))
+            {
+                continue;
+            }
             if (loop.Count == 0)
             {
                 loop.Add(segment.Start);
+                loop.Add(segment.End);
+                continue;
             }
-            loop.Add(segment.End);
+            Vector3 last = loop[^1];
+            if (Vector3.DistanceSquared(last, segment.Start) <= 1e-8f)
+            {
+                loop.Add(segment.End);
+            }
+            else if (Vector3.DistanceSquared(last, segment.End) <= 1e-8f)
+            {
+                loop.Add(segment.Start);
+            }
+            else if (Vector3.DistanceSquared(loop[0], segment.End) <= 1e-8f)
+            {
+                loop.Insert(0, segment.Start);
+            }
+            else if (Vector3.DistanceSquared(loop[0], segment.Start) <= 1e-8f)
+            {
+                loop.Insert(0, segment.End);
+            }
+            else
+            {
+                loop.Add(segment.Start);
+                loop.Add(segment.End);
+            }
         }
     }
 
@@ -1030,9 +1072,10 @@ internal static class DisplayGeometryExtractor
         TextEntity text,
         int layerId,
         CadColorValue color,
-        List<LocalSegment> destination)
+        List<LocalSegment> destination,
+        List<LocalTriangle>? fills)
     {
-        string value = text.Value ?? string.Empty;
+        string value = CadTextCodec.Plain(text);
         if (string.IsNullOrWhiteSpace(value))
         {
             return;
@@ -1071,12 +1114,13 @@ internal static class DisplayGeometryExtractor
             TextVerticalAlignmentType.Bottom => 0.15f,
             _ => 0f,
         };
+        float scale = AnnotationScale.ModelFactor(text);
         StrokeFont.AppendLabel(
             [value],
             origin,
             axisX,
             axisY,
-            (float)Math.Max(text.Height, 1e-4),
+            (float)Math.Max(text.Height, 1e-4) * scale,
             text.WidthFactor > 0
                 ? (float)text.WidthFactor
                 : text.Style?.Width > 0 ? (float)text.Style.Width : 1f,
@@ -1087,40 +1131,21 @@ internal static class DisplayGeometryExtractor
             layerId,
             color,
             destination,
-            style: text.Style);
+            style: text.Style,
+            fills: fills);
     }
 
     private static void AppendMText(
         MText mtext,
         int layerId,
         CadColorValue color,
-        List<LocalSegment> destination)
+        List<LocalSegment> destination,
+        List<LocalTriangle>? fills)
     {
-        string[] lines;
-        try
-        {
-            lines = mtext.GetPlainTextLines() ?? [];
-        }
-        catch (Exception)
-        {
-            lines = [];
-        }
+        string[] lines = CadTextCodec.PlainLines(mtext);
         if (lines.Length == 0 || lines.All(string.IsNullOrWhiteSpace))
         {
-            string plain;
-            try
-            {
-                plain = mtext.PlainText;
-            }
-            catch (Exception)
-            {
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(plain))
-            {
-                return;
-            }
-            lines = [plain];
+            return;
         }
         if (!CadMath.TryOcsToWcs(mtext.InsertPoint, mtext.Normal, out Vector3 origin))
         {
@@ -1132,7 +1157,20 @@ internal static class DisplayGeometryExtractor
             out Vector3 axisX,
             out Vector3 axisY);
         AttachmentAlign(mtext.AttachmentPoint, out float alignX, out float alignY);
-        float wrap = mtext.RectangleWidth > 0 ? (float)mtext.RectangleWidth : 0f;
+        float scale = AnnotationScale.ModelFactor(mtext);
+        float wrap = mtext.RectangleWidth > 0 ? (float)mtext.RectangleWidth * scale : 0f;
+        try
+        {
+            if (wrap > 0
+                && mtext.HorizontalWidth > wrap
+                && wrap < (float)Math.Max(mtext.Height, 1e-4) * scale * 2f)
+            {
+                wrap = 0f;
+            }
+        }
+        catch (Exception)
+        {
+        }
         float widthFactor = mtext.Style?.Width > 0 ? (float)mtext.Style.Width : 1f;
         float spacing = (float)(mtext.LineSpacing > 0 ? mtext.LineSpacing : 1);
         StrokeFont.AppendLabel(
@@ -1140,7 +1178,7 @@ internal static class DisplayGeometryExtractor
             origin,
             axisX,
             axisY,
-            (float)Math.Max(mtext.Height, 1e-4),
+            (float)Math.Max(mtext.Height, 1e-4) * scale,
             widthFactor,
             (float)(mtext.Style?.ObliqueAngle ?? 0),
             alignX,
@@ -1151,7 +1189,8 @@ internal static class DisplayGeometryExtractor
             destination,
             HasMTextFrame(mtext),
             spacing,
-            mtext.Style);
+            mtext.Style,
+            fills);
     }
 
     private static bool HasMTextFrame(MText mtext) =>
@@ -1316,7 +1355,7 @@ internal static class DisplayGeometryExtractor
         int layerId,
         CadColorValue color)
     {
-        if (CadMath.IsUsable(start) && CadMath.IsUsable(end) && start != end)
+        if (CadMath.IsPlausible(start) && CadMath.IsPlausible(end) && start != end)
         {
             destination.Add(new LocalSegment(start, end, layerId, color));
         }

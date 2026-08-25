@@ -8,7 +8,7 @@ namespace DwgTrueView.Cad;
 /// </summary>
 internal static class HatchFillTessellator
 {
-    private const int MaxVertices = 256;
+    private const int DefaultMaxVertices = 256;
 
     public static void Append(
         IReadOnlyList<Vector3> loop,
@@ -16,7 +16,8 @@ internal static class HatchFillTessellator
         CadColorValue colorA,
         CadColorValue colorB,
         CadColorValue colorC,
-        List<LocalTriangle> destination)
+        List<LocalTriangle> destination,
+        int maxVertices = DefaultMaxVertices)
     {
         if (destination is null || loop is null || loop.Count < 3)
         {
@@ -41,7 +42,7 @@ internal static class HatchFillTessellator
         {
             points.RemoveAt(points.Count - 1);
         }
-        if (points.Count < 3 || points.Count > MaxVertices)
+        if (points.Count < 3 || points.Count > Math.Max(3, maxVertices))
         {
             return;
         }
@@ -169,9 +170,9 @@ internal static class HatchFillTessellator
         CadColorValue colorB,
         CadColorValue colorC)
     {
-        if (!CadMath.IsUsable(a)
-            || !CadMath.IsUsable(b)
-            || !CadMath.IsUsable(c))
+        if (!CadMath.IsPlausible(a)
+            || !CadMath.IsPlausible(b)
+            || !CadMath.IsPlausible(c))
         {
             return;
         }
