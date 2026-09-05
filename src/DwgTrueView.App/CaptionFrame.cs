@@ -18,6 +18,8 @@ internal enum CaptionRegion
 /// </summary>
 internal static class CaptionFrame
 {
+    private const int WmSysCommand = 0x0112;
+    private const int ScMove = 0xF010;
     private const int WmNcCalcSize = 0x0083;
     private const int WmNcHitTest = 0x0084;
     private const int WmNcActivate = 0x0086;
@@ -131,15 +133,40 @@ internal static class CaptionFrame
             return true;
         }
 
-        // HTCAPTION is the WinForms equivalent of WPF WindowChrome:
-        // Windows owns move, Aero Snap, drag-to-restore, and caption double-click.
+        // Drag stays HTCLIENT so the caption control can start a native
+        // SC_MOVE loop (needed after WM_NCCALCSIZE removes the real caption).
         message.Result = caption switch
         {
-            CaptionRegion.Drag => (IntPtr)HtCaption,
+            CaptionRegion.Drag => (IntPtr)HtClient,
             CaptionRegion.SystemMenu => (IntPtr)HtSysMenu,
             _ => (IntPtr)HtClient,
         };
         return true;
+    }
+
+    public static void RestoreAndDrag(Form form, Point screenCursor, int captionLocalY)
+    {
+        if (form.WindowState == FormWindowState.Maximized)
+        {
+            Rectangle restore = form.RestoreBounds;
+            int span = Math.Max(1, form.Width);
+            double ratio = Math.Clamp((screenCursor.X - form.Left) / (double)span, 0.08, 0.92);
+            int x = screenCursor.X - (int)Math.Round(restore.Width * ratio);
+            int y = screenCursor.Y - Math.Clamp(captionLocalY, 0, 32);
+            Rectangle work = Screen.FromPoint(screenCursor).WorkingArea;
+            x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - restore.Width));
+            y = Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - restore.Height));
+            form.WindowState = FormWindowState.Normal;
+            form.Bounds = new Rectangle(x, y, restore.Width, restore.Height);
+        }
+
+        BeginNativeDrag(form);
+    }
+
+    public static void BeginNativeDrag(Form form)
+    {
+        _ = ReleaseCapture();
+        _ = SendMessage(form.Handle, WmSysCommand, ScMove | HtCaption, IntPtr.Zero);
     }
 
     public static void NotifyChanged(Form form)
@@ -204,4 +231,10 @@ internal static class CaptionFrame
 
     [DllImport("user32.dll")]
     private static extern IntPtr DefWindowProc(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr handle, int message, int wParam, IntPtr lParam);
 }

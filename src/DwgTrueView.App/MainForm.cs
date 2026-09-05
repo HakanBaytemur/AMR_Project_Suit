@@ -1,3 +1,4 @@
+using System.Drawing.Printing;
 using System.Numerics;
 using DwgTrueView.Cad;
 using DwgTrueView.Core;
@@ -18,6 +19,7 @@ public sealed class MainForm : Form
     private readonly ToolStripStatusLabel _coordinates = new();
     private readonly ToolStripProgressBar _progress = new();
     private readonly UndoStack _undo = new();
+    private readonly CadAliasBuffer _aliases = new();
     private LayerPropertiesForm? _layerForm;
     private CancellationTokenSource _shutdown = new();
     private int _loadsInFlight;
@@ -98,7 +100,7 @@ public sealed class MainForm : Form
         };
         _statusText.Spring = true;
         _statusText.TextAlign = ContentAlignment.MiddleLeft;
-        _statusText.Text = "Ready — wheel zoom, Zoom Window drag, middle-button pan, Home/F zoom extents";
+        _statusText.Text = "Ready — wheel zoom, middle-button pan, Home or middle double-click to fit";
         _coordinates.AutoSize = false;
         _coordinates.Width = 220;
         _coordinates.TextAlign = ContentAlignment.MiddleRight;
@@ -117,7 +119,7 @@ public sealed class MainForm : Form
         _ribbon.AttachHost(this);
         WindowState = FormWindowState.Maximized;
 
-        KeyDown += OnFormKeyDown;
+        _aliases.Matched += OnAliasMatched;
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
         Activated += (_, _) => TaskbarHighlight.StopFlash(this);
@@ -133,6 +135,7 @@ public sealed class MainForm : Form
             {
                 _layerForm.Close();
             }
+            _aliases.Dispose();
         };
     }
 
@@ -262,7 +265,7 @@ public sealed class MainForm : Form
 
         _viewport.PresentSession(null, _emptyCamera, [], fitExtents: false);
         BindLayers(null);
-        _statusText.Text = "Ready — wheel zoom, Zoom Window drag, middle-button pan, Home/F zoom extents";
+        _statusText.Text = "Ready — wheel zoom, middle-button pan, Home or middle double-click to fit";
     }
 
     private void OnTabSelected(Guid id)
@@ -631,63 +634,8 @@ public sealed class MainForm : Form
         }
     }
 
-    private void OnFormKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Control && e.KeyCode == Keys.O)
-        {
-            OnOpenClicked(this, EventArgs.Empty);
-            e.Handled = true;
-        }
-        else if (e.Control && e.KeyCode == Keys.S)
-        {
-            OnSaveClicked(this, EventArgs.Empty);
-            e.Handled = true;
-        }
-        else if (e.Control && e.KeyCode == Keys.C)
-        {
-            OnCopyClicked(this, EventArgs.Empty);
-            e.Handled = true;
-        }
-        else if (e.Control && e.KeyCode == Keys.V)
-        {
-            OnPasteClicked(this, EventArgs.Empty);
-            e.Handled = true;
-        }
-        else if (e.Control && e.KeyCode == Keys.W)
-        {
-            if (_workspace.Active is { } tab)
-            {
-                OnTabClosed(tab.Id);
-            }
-            e.Handled = true;
-        }
-        else if (e.KeyCode is Keys.Home or Keys.F)
-        {
-            _viewport.ZoomExtents();
-            e.Handled = true;
-        }
-    }
-
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (keyData == (Keys.Control | Keys.Z))
-        {
-            if (IsTextEditing(ActiveControl))
-            {
-                return base.ProcessCmdKey(ref msg, keyData);
-            }
-            OnUndoClicked(this, EventArgs.Empty);
-            return true;
-        }
-        if (keyData is (Keys.Control | Keys.Y) or (Keys.Control | Keys.Shift | Keys.Z))
-        {
-            if (IsTextEditing(ActiveControl))
-            {
-                return base.ProcessCmdKey(ref msg, keyData);
-            }
-            OnRedoClicked(this, EventArgs.Empty);
-            return true;
-        }
         if (keyData is (Keys.Control | Keys.Tab) or (Keys.Control | Keys.Shift | Keys.Tab))
         {
             int delta = keyData.HasFlag(Keys.Shift) ? -1 : 1;
@@ -697,11 +645,182 @@ public sealed class MainForm : Form
             }
             return true;
         }
+
+        if (CadShortcuts.IsTextEditing(ActiveControl))
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        Keys modifiers = keyData & Keys.Modifiers;
+        Keys key = keyData & Keys.KeyCode;
+        if (modifiers == Keys.Control)
+        {
+            _aliases.Clear();
+            switch (key)
+            {
+                case Keys.N:
+                    OnOpenClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.O:
+                    OnOpenClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.S:
+                    OnSaveClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.P:
+                    OnPrintClicked();
+                    return true;
+                case Keys.Z:
+                    OnUndoClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.Y:
+                    OnRedoClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.C:
+                    OnCopyClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.V:
+                    OnPasteClicked(this, EventArgs.Empty);
+                    return true;
+                case Keys.X:
+                    AnnounceCommand(_ribbon.CutButton);
+                    return true;
+                case Keys.W:
+                    if (_workspace.Active is { } tab)
+                    {
+                        OnTabClosed(tab.Id);
+                    }
+                    return true;
+            }
+        }
+
+        if (modifiers == (Keys.Control | Keys.Shift) && key == Keys.Z)
+        {
+            _aliases.Clear();
+            OnRedoClicked(this, EventArgs.Empty);
+            return true;
+        }
+
+        if (modifiers == Keys.None)
+        {
+            switch (key)
+            {
+                case Keys.Home:
+                    _aliases.Clear();
+                    _viewport.ZoomExtents();
+                    return true;
+                case Keys.F3:
+                    _aliases.Clear();
+                    ToggleObjectSnap();
+                    return true;
+                case Keys.F7:
+                    _aliases.Clear();
+                    _ribbon.GridButton.Checked = !_ribbon.GridButton.Checked;
+                    return true;
+                case Keys.F8:
+                    _aliases.Clear();
+                    _ribbon.OrthogonalSnapButton.Checked = !_ribbon.OrthogonalSnapButton.Checked;
+                    _statusText.Text = _ribbon.OrthogonalSnapButton.Checked
+                        ? "Orthogonal Snap on [F8]"
+                        : "Orthogonal Snap off [F8]";
+                    return true;
+            }
+
+            if (_aliases.Feed(key))
+            {
+                return true;
+            }
+        }
+
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    private static bool IsTextEditing(Control? control) =>
-        control is TextBoxBase;
+    private void OnAliasMatched(string alias)
+    {
+        string? name = CadShortcuts.CommandName(alias);
+        if (name is null)
+        {
+            return;
+        }
+
+        ToolStripButton? button = _ribbon.FindCommand(name);
+        if (button is not null)
+        {
+            AnnounceCommand(button);
+        }
+    }
+
+    private void ToggleObjectSnap()
+    {
+        bool next = !(_ribbon.NodeSnapButton.Checked || _ribbon.GeometricSnapButton.Checked);
+        _ribbon.NodeSnapButton.Checked = next;
+        _ribbon.GeometricSnapButton.Checked = next;
+        _statusText.Text = next ? "Object snap on [F3]" : "Object snap off [F3]";
+    }
+
+    private void AnnounceCommand(ToolStripButton button)
+    {
+        string title = button.Text ?? "Command";
+        string shortcut = button.Tag is CommandTip tip && !string.IsNullOrWhiteSpace(tip.Shortcut)
+            ? $" [{tip.Shortcut}]"
+            : string.Empty;
+        string body = button.Tag is CommandTip command && !string.IsNullOrWhiteSpace(command.Description)
+            ? command.Description
+            : "This command will be added here.";
+        _statusText.Text = $"{title}{shortcut} — {body}";
+    }
+
+    private void OnPrintClicked()
+    {
+        Rectangle screen = _viewport.RectangleToScreen(_viewport.ClientRectangle);
+        if (screen.Width <= 1 || screen.Height <= 1)
+        {
+            return;
+        }
+
+        using var bitmap = new Bitmap(screen.Width, screen.Height);
+        using (Graphics graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen(screen.Location, Point.Empty, screen.Size);
+        }
+
+        using var document = new PrintDocument();
+        document.DocumentName = _workspace.Active?.FileName ?? ProductInfo.Name;
+        document.PrintPage += (_, e) =>
+        {
+            if (e.Graphics is null)
+            {
+                return;
+            }
+
+            Rectangle margin = e.MarginBounds;
+            float scale = Math.Min(
+                margin.Width / (float)bitmap.Width,
+                margin.Height / (float)bitmap.Height);
+            int width = Math.Max(1, (int)Math.Round(bitmap.Width * scale));
+            int height = Math.Max(1, (int)Math.Round(bitmap.Height * scale));
+            var dest = new Rectangle(
+                margin.X + (margin.Width - width) / 2,
+                margin.Y + (margin.Height - height) / 2,
+                width,
+                height);
+            e.Graphics.DrawImage(bitmap, dest);
+            e.HasMorePages = false;
+        };
+
+        using var dialog = new PrintDialog
+        {
+            Document = document,
+            UseEXDialog = true,
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        document.Print();
+        _statusText.Text = "Print — sent the current viewport to the printer.";
+    }
 
     private void OnDragEnter(object? sender, DragEventArgs e)
     {

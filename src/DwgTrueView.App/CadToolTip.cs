@@ -1,7 +1,24 @@
 namespace DwgTrueView.App;
 
-internal sealed record CommandTip(string Title, string Description, string Shortcut = "")
+internal sealed record CommandTip(
+    string Title,
+    string Description,
+    string Shortcut = "",
+    string Command = "")
 {
+    public string CommandCode
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(Command))
+            {
+                return Command;
+            }
+
+            return new string(Title.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+        }
+    }
+
     public static CommandTip? FromItem(ToolStripItem? item)
     {
         if (item is null or ToolStripSeparator)
@@ -31,73 +48,76 @@ internal sealed record CommandTip(string Title, string Description, string Short
 }
 
 /// <summary>
-/// Standard WinForms ToolTip with OwnerDraw styling — the practical
-/// equivalent of a WPF ToolTip template: title, optional [shortcut],
-/// and a short description after the system hover delay.
+/// AutoCAD / SolidWorks style command tip. ToolStrip items use MouseHover
+/// and a modeless popup (not WinForms ToolTip) so the strip's own tooltip
+/// host cannot swallow the main-toolbar tips.
 /// </summary>
 internal sealed class CadToolTip : IDisposable
 {
-    private static readonly Color TipFill = Color.FromArgb(38, 40, 46);
-    private static readonly Color TipBorder = Color.FromArgb(86, 90, 98);
-    private static readonly Color TitleColor = Color.FromArgb(245, 245, 247);
-    private static readonly Color ShortcutColor = Color.FromArgb(130, 190, 255);
-    private static readonly Color BodyColor = Color.FromArgb(176, 180, 188);
-    private static readonly Color RuleColor = Color.FromArgb(68, 72, 80);
+    private const int MaxText = 280;
+
+    private static readonly Color TipFill = Color.FromArgb(248, 248, 248);
+    private static readonly Color TipBorder = Color.FromArgb(168, 168, 168);
+    private static readonly Color TitleColor = Color.FromArgb(20, 20, 20);
+    private static readonly Color ShortcutColor = Color.FromArgb(70, 70, 70);
+    private static readonly Color BodyColor = Color.FromArgb(48, 48, 48);
+    private static readonly Color FooterColor = Color.FromArgb(96, 96, 96);
+    private static readonly Color RuleColor = Color.FromArgb(210, 210, 210);
 
     private readonly Control _host;
-    private readonly Func<Point, HoverTarget?> _hit;
-    private readonly ToolTip _tips;
+    private readonly Func<Point, HoverTarget?>? _hit;
     private readonly System.Windows.Forms.Timer _timer;
-    private readonly Font _titleFont = new("Segoe UI", 9f, FontStyle.Bold);
-    private readonly Font _shortcutFont = new("Segoe UI", 8.25f, FontStyle.Bold);
-    private readonly Font _bodyFont = new("Segoe UI", 8.25f);
+    private readonly TipWindow _window;
     private HoverTarget? _current;
-    private CommandTip _tip = new(string.Empty, string.Empty);
-    private bool _visible;
     private bool _disposed;
 
-    private readonly record struct HoverTarget(object Key, CommandTip Tip, Point ShowAt);
+    private readonly record struct HoverTarget(object Key, CommandTip Tip, Rectangle ScreenAnchor);
 
-    private CadToolTip(Control host, Func<Point, HoverTarget?> hit)
+    private CadToolTip(Control host, Func<Point, HoverTarget?>? hit)
     {
         _host = host;
         _hit = hit;
-        _tips = new ToolTip
-        {
-            OwnerDraw = true,
-            ShowAlways = true,
-            UseAnimation = true,
-            UseFading = true,
-        };
-        _tips.Popup += OnPopup;
-        _tips.Draw += OnDraw;
+        _window = new TipWindow();
         _timer = new System.Windows.Forms.Timer
         {
             Interval = Math.Clamp(SystemInformation.MouseHoverTime, 400, 700),
         };
         _timer.Tick += OnTick;
-        host.MouseMove += OnMouseMove;
-        host.MouseLeave += OnMouseLeave;
-        host.MouseDown += OnMouseDown;
         host.Disposed += (_, _) => Dispose();
+        if (hit is not null)
+        {
+            host.MouseMove += OnHostMouseMove;
+            host.MouseLeave += OnHostMouseLeave;
+            host.MouseDown += (_, _) => HideTip();
+        }
     }
 
     public static CadToolTip Attach(ToolStrip strip)
     {
         strip.ShowItemToolTips = false;
+        var tips = new CadToolTip(strip, hit: null);
         foreach (ToolStripItem item in strip.Items)
         {
-            item.AutoToolTip = false;
+            BindItem(tips, strip, item);
         }
 
-        return new CadToolTip(strip, point =>
+        strip.ItemAdded += (_, e) =>
         {
-            ToolStripItem? item = strip.GetItemAt(point);
-            CommandTip? tip = CommandTip.FromItem(item);
-            return tip is null || item is null
-                ? null
-                : new HoverTarget(item, tip, new Point(item.Bounds.Left, item.Bounds.Bottom + 6));
-        });
+            if (e.Item is not null)
+            {
+                BindItem(tips, strip, e.Item);
+            }
+        };
+        strip.MouseDown += (_, _) => tips.HideTip();
+        strip.MouseLeave += (_, _) =>
+        {
+            Point local = strip.PointToClient(Control.MousePosition);
+            if (!strip.ClientRectangle.Contains(local))
+            {
+                tips.HideTip();
+            }
+        };
+        return tips;
     }
 
     public static CadToolTip Attach(Control host, Func<Point, (CommandTip Tip, Rectangle Anchor)?> hit)
@@ -105,12 +125,16 @@ internal sealed class CadToolTip : IDisposable
         return new CadToolTip(host, point =>
         {
             (CommandTip Tip, Rectangle Anchor)? found = hit(point);
-            return found is null
-                ? null
-                : new HoverTarget(
-                    found.Value.Tip.Title + found.Value.Tip.Shortcut + found.Value.Tip.Description,
-                    found.Value.Tip,
-                    new Point(found.Value.Anchor.Left, found.Value.Anchor.Bottom + 6));
+            if (found is null)
+            {
+                return null;
+            }
+
+            Rectangle screen = host.RectangleToScreen(found.Value.Anchor);
+            return new HoverTarget(
+                found.Value.Tip.Title + found.Value.Tip.Shortcut + found.Value.Tip.Description,
+                found.Value.Tip,
+                screen);
         });
     }
 
@@ -124,14 +148,46 @@ internal sealed class CadToolTip : IDisposable
         _disposed = true;
         HideTip();
         _timer.Dispose();
-        _tips.Dispose();
-        _titleFont.Dispose();
-        _shortcutFont.Dispose();
-        _bodyFont.Dispose();
+        _window.Dispose();
     }
 
-    private void OnMouseMove(object? sender, MouseEventArgs e)
+    private static void BindItem(CadToolTip tips, ToolStrip strip, ToolStripItem item)
     {
+        if (item is ToolStripSeparator)
+        {
+            return;
+        }
+
+        item.AutoToolTip = false;
+        item.MouseHover += (_, _) =>
+        {
+            CommandTip? tip = CommandTip.FromItem(item);
+            if (tip is null)
+            {
+                return;
+            }
+
+            Rectangle bounds = item.Bounds;
+            tips.ShowTip(new HoverTarget(item, tip, strip.RectangleToScreen(bounds)));
+        };
+        item.MouseLeave += (_, _) =>
+        {
+            Point screen = Control.MousePosition;
+            if (!strip.RectangleToScreen(item.Bounds).Contains(screen))
+            {
+                tips.HideTip();
+            }
+        };
+        item.MouseDown += (_, _) => tips.HideTip();
+    }
+
+    private void OnHostMouseMove(object? sender, MouseEventArgs e)
+    {
+        if (_hit is null)
+        {
+            return;
+        }
+
         HoverTarget? next = _hit(e.Location);
         if (_current is { } current && next is { } same && Equals(current.Key, same.Key))
         {
@@ -147,7 +203,7 @@ internal sealed class CadToolTip : IDisposable
         }
     }
 
-    private void OnMouseLeave(object? sender, EventArgs e)
+    private void OnHostMouseLeave(object? sender, EventArgs e)
     {
         Point local = _host.PointToClient(Control.MousePosition);
         if (_host.ClientRectangle.Contains(local))
@@ -160,128 +216,200 @@ internal sealed class CadToolTip : IDisposable
         HideTip();
     }
 
-    private void OnMouseDown(object? sender, MouseEventArgs e)
-    {
-        _timer.Stop();
-        HideTip();
-    }
-
     private void OnTick(object? sender, EventArgs e)
     {
         _timer.Stop();
-        if (_current is not { } target)
+        if (_current is { } target)
         {
-            return;
+            ShowTip(target);
         }
+    }
 
-        _tip = target.Tip;
-        _visible = true;
-        string token = string.IsNullOrWhiteSpace(_tip.Description) ? _tip.Title : _tip.Description;
-        _tips.Show(token, _host, target.ShowAt, 12000);
+    private void ShowTip(HoverTarget target)
+    {
+        _current = target;
+        _window.Present(target.Tip, target.ScreenAnchor);
     }
 
     private void HideTip()
     {
-        if (!_visible)
-        {
-            return;
-        }
-
-        _visible = false;
-        _tips.Hide(_host);
+        _window.Hide();
     }
 
-    private void OnPopup(object? sender, PopupEventArgs e)
+    private sealed class TipWindow : Form
     {
-        const int maxText = 280;
-        Size title = Measure(_tip.Title, _titleFont, maxText, wrap: false);
-        string shortcut = ShortcutText(_tip);
-        Size badge = string.IsNullOrEmpty(shortcut)
-            ? Size.Empty
-            : Measure(shortcut, _shortcutFont, 160, wrap: false);
-        Size body = string.IsNullOrWhiteSpace(_tip.Description)
-            ? Size.Empty
-            : Measure(_tip.Description, _bodyFont, maxText, wrap: true);
+        private readonly Font _titleFont = new("Segoe UI", 9.75f, FontStyle.Bold);
+        private readonly Font _shortcutFont = new("Segoe UI Semibold", 8.25f, FontStyle.Bold);
+        private readonly Font _bodyFont = new("Segoe UI", 8.25f);
+        private readonly Font _footerFont = new("Segoe UI", 8f);
+        private CommandTip _tip = new(string.Empty, string.Empty);
 
-        int header = title.Width + (badge.Width > 0 ? 12 + badge.Width : 0);
-        int width = Math.Max(header, body.Width) + 22;
-        int height = 16 + title.Height;
-        if (body.Height > 0)
+        public TipWindow()
         {
-            height += 10 + body.Height;
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            TopMost = true;
+            BackColor = TipFill;
+            DoubleBuffered = true;
         }
 
-        e.ToolTipSize = new Size(Math.Clamp(width, 140, 340), height);
-    }
+        protected override bool ShowWithoutActivation => true;
 
-    private void OnDraw(object? sender, DrawToolTipEventArgs e)
-    {
-        using var fill = new SolidBrush(TipFill);
-        e.Graphics.FillRectangle(fill, e.Bounds);
-        using var border = new Pen(TipBorder);
-        Rectangle edge = e.Bounds;
-        edge.Width -= 1;
-        edge.Height -= 1;
-        e.Graphics.DrawRectangle(border, edge);
-
-        var titleBounds = new Rectangle(e.Bounds.X + 11, e.Bounds.Y + 8, e.Bounds.Width - 22, _titleFont.Height + 2);
-        string shortcut = ShortcutText(_tip);
-        if (shortcut.Length > 0)
+        protected override CreateParams CreateParams
         {
-            Size badge = Measure(shortcut, _shortcutFont, 160, wrap: false);
-            var badgeBounds = new Rectangle(
-                e.Bounds.Right - 11 - badge.Width,
-                titleBounds.Y + 1,
-                badge.Width,
-                badge.Height);
-            titleBounds.Width = Math.Max(40, badgeBounds.Left - titleBounds.Left - 8);
+            get
+            {
+                CreateParams parameters = base.CreateParams;
+                parameters.ClassStyle |= 0x00020000;
+                parameters.ExStyle |= 0x08000000;
+                return parameters;
+            }
+        }
+
+        public void Present(CommandTip tip, Rectangle screenAnchor)
+        {
+            _tip = tip;
+            Size size = MeasureTip(tip);
+            int x = screenAnchor.Left;
+            int y = screenAnchor.Bottom + 4;
+            Rectangle work = Screen.FromPoint(screenAnchor.Location).WorkingArea;
+            x = Math.Clamp(x, work.Left + 4, Math.Max(work.Left + 4, work.Right - size.Width - 4));
+            if (y + size.Height > work.Bottom)
+            {
+                y = screenAnchor.Top - size.Height - 2;
+            }
+
+            Size = size;
+            Location = new Point(x, y);
+            Invalidate();
+            if (!Visible)
+            {
+                Show();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics graphics = e.Graphics;
+            Rectangle body = new(0, 0, Width - 1, Height - 1);
+            using var fill = new SolidBrush(TipFill);
+            using var border = new Pen(TipBorder);
+            graphics.FillRectangle(fill, body);
+            graphics.DrawRectangle(border, body);
+
+            int x = 12;
+            int y = 10;
+            string shortcut = string.IsNullOrWhiteSpace(_tip.Shortcut) ? string.Empty : $"[{_tip.Shortcut}]";
+            Size shortcutSize = string.IsNullOrEmpty(shortcut)
+                ? Size.Empty
+                : Measure(shortcut, _shortcutFont, 160, wrap: false);
+            var titleBounds = new Rectangle(x, y, Width - 24 - (shortcutSize.Width > 0 ? shortcutSize.Width + 10 : 0), _titleFont.Height + 2);
             TextRenderer.DrawText(
-                e.Graphics,
-                shortcut,
-                _shortcutFont,
-                badgeBounds,
-                ShortcutColor,
+                graphics,
+                _tip.Title,
+                _titleFont,
+                titleBounds,
+                TitleColor,
+                TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            if (shortcutSize.Width > 0)
+            {
+                TextRenderer.DrawText(
+                    graphics,
+                    shortcut,
+                    _shortcutFont,
+                    new Rectangle(Width - 12 - shortcutSize.Width, y + 2, shortcutSize.Width, shortcutSize.Height),
+                    ShortcutColor,
+                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            }
+
+            y = titleBounds.Bottom + 6;
+            if (!string.IsNullOrWhiteSpace(_tip.Description))
+            {
+                Size bodySize = Measure(_tip.Description, _bodyFont, MaxText, wrap: true);
+                TextRenderer.DrawText(
+                    graphics,
+                    _tip.Description,
+                    _bodyFont,
+                    new Rectangle(x, y, Width - 24, bodySize.Height),
+                    BodyColor,
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                y += bodySize.Height + 10;
+            }
+
+            using var rule = new Pen(RuleColor);
+            graphics.DrawLine(rule, x, y, Width - 12, y);
+            y += 8;
+            string code = _tip.CommandCode;
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                TextRenderer.DrawText(
+                    graphics,
+                    code,
+                    _shortcutFont,
+                    new Rectangle(x, y, Width - 24, _shortcutFont.Height + 2),
+                    TitleColor,
+                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                y += _shortcutFont.Height + 4;
+            }
+
+            TextRenderer.DrawText(
+                graphics,
+                "Press F1 for more help",
+                _footerFont,
+                new Rectangle(x, y, Width - 24, _footerFont.Height + 2),
+                FooterColor,
                 TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
         }
 
-        TextRenderer.DrawText(
-            e.Graphics,
-            _tip.Title,
-            _titleFont,
-            titleBounds,
-            TitleColor,
-            TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-
-        if (string.IsNullOrWhiteSpace(_tip.Description))
+        protected override void Dispose(bool disposing)
         {
-            return;
+            if (disposing)
+            {
+                _titleFont.Dispose();
+                _shortcutFont.Dispose();
+                _bodyFont.Dispose();
+                _footerFont.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
 
-        int ruleY = titleBounds.Bottom + 4;
-        using var rule = new Pen(RuleColor);
-        e.Graphics.DrawLine(rule, e.Bounds.X + 11, ruleY, e.Bounds.Right - 11, ruleY);
+        private Size MeasureTip(CommandTip tip)
+        {
+            Size title = Measure(tip.Title, _titleFont, MaxText, wrap: false);
+            string shortcut = string.IsNullOrWhiteSpace(tip.Shortcut) ? string.Empty : $"[{tip.Shortcut}]";
+            Size badge = string.IsNullOrEmpty(shortcut)
+                ? Size.Empty
+                : Measure(shortcut, _shortcutFont, 160, wrap: false);
+            Size body = string.IsNullOrWhiteSpace(tip.Description)
+                ? Size.Empty
+                : Measure(tip.Description, _bodyFont, MaxText, wrap: true);
+            Size code = Measure(tip.CommandCode, _shortcutFont, MaxText, wrap: false);
+            Size help = Measure("Press F1 for more help", _footerFont, MaxText, wrap: false);
+            int header = title.Width + (badge.Width > 0 ? 12 + badge.Width : 0);
+            int width = Math.Max(Math.Max(header, body.Width), Math.Max(code.Width, help.Width)) + 28;
+            int height = 22 + title.Height + 8 + help.Height + 12;
+            if (body.Height > 0)
+            {
+                height += body.Height + 10;
+            }
 
-        var bodyBounds = new Rectangle(
-            e.Bounds.X + 11,
-            ruleY + 6,
-            e.Bounds.Width - 22,
-            e.Bounds.Bottom - ruleY - 10);
-        TextRenderer.DrawText(
-            e.Graphics,
-            _tip.Description,
-            _bodyFont,
-            bodyBounds,
-            BodyColor,
-            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            if (!string.IsNullOrWhiteSpace(tip.CommandCode))
+            {
+                height += code.Height + 4;
+            }
+
+            return new Size(Math.Clamp(width, 200, 360), height);
+        }
+
+        private static Size Measure(string text, Font font, int width, bool wrap) =>
+            TextRenderer.MeasureText(
+                text,
+                font,
+                new Size(width, 0),
+                (wrap ? TextFormatFlags.WordBreak : TextFormatFlags.SingleLine)
+                | TextFormatFlags.NoPadding
+                | TextFormatFlags.NoPrefix);
     }
-
-    private static string ShortcutText(CommandTip tip) =>
-        string.IsNullOrWhiteSpace(tip.Shortcut) ? string.Empty : $"[{tip.Shortcut}]";
-
-    private static Size Measure(string text, Font font, int width, bool wrap) =>
-        TextRenderer.MeasureText(
-            text,
-            font,
-            new Size(width, 0),
-            (wrap ? TextFormatFlags.WordBreak : TextFormatFlags.SingleLine) | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
 }

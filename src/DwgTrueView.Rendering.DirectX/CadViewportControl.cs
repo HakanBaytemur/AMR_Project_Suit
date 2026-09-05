@@ -427,7 +427,7 @@ public sealed class CadViewportControl : Control
         ref System.Windows.Forms.Message msg,
         Keys keyData)
     {
-        if (keyData is Keys.F or Keys.Home)
+        if (keyData is Keys.Home)
         {
             ZoomExtents();
             return true;

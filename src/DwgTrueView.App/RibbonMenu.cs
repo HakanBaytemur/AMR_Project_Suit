@@ -11,12 +11,13 @@ internal sealed class RibbonMenu : Panel
     private static readonly Color BorderColor = Color.FromArgb(58, 60, 68);
 
     private readonly RibbonTabBar _tabBar;
-    private readonly ToolStrip _mainToolbar;
+    private readonly Control _mainToolbar;
     private readonly ToolStrip _simulationToolbar;
+    private readonly List<ToolStrip> _commandStrips = [];
 
     public RibbonMenu()
     {
-        Height = 131;
+        Height = 148;
         BackColor = CommandBarColor;
         OpenButton = CreateCommand(
             "Open File",
@@ -51,14 +52,68 @@ internal sealed class RibbonMenu : Panel
         ZoomExtentsButton = CreateCommand(
             "Zoom Extents",
             "Zoom Extents.svg",
-            "Fit the entire drawing in the viewport.",
-            shortcut: "Home, F");
+            "Fit the entire drawing in the viewport. Middle-button double-click also fits.",
+            shortcut: "Home");
         GridButton = CreateCommand(
             "Grid",
             "Grid.svg",
-            "Show or hide the adaptive background grid.");
+            "Show or hide the adaptive background grid.",
+            shortcut: "F7");
         GridButton.CheckOnClick = true;
         GridButton.Checked = true;
+        NodeSnapButton = CreateCommand(
+            "Node Snap",
+            "Node Snap.svg",
+            "Snap to nodes. This command will be added here.",
+            shortcut: "F3");
+        NodeSnapButton.CheckOnClick = true;
+        GeometricSnapButton = CreateCommand(
+            "Geometric Snap",
+            "Geometric Snap.svg",
+            "Snap to geometric points. This command will be added here.",
+            shortcut: "F3");
+        GeometricSnapButton.CheckOnClick = true;
+        OrthogonalSnapButton = CreateCommand(
+            "Orthogonal Snap",
+            "Orthogonal Snap.svg",
+            "Constrain drawing to orthogonal directions. This command will be added here.",
+            shortcut: "F8");
+        OrthogonalSnapButton.CheckOnClick = true;
+        StraightRouteButton = CreateCommand(
+            "Straight Route",
+            "Straight Route.svg",
+            "Draw a straight route. This command will be added here.",
+            shortcut: "L");
+        MoveButton = CreateCommand(
+            "Move",
+            "Move.svg",
+            "Move layout elements. This command will be added here.",
+            shortcut: "M");
+        RotateButton = CreateCommand(
+            "Rotate",
+            "Rotate.svg",
+            "Rotate layout elements. This command will be added here.",
+            shortcut: "RO");
+        CopyElementsButton = CreateCommand(
+            "Copy to Clipboard",
+            "Copy to Clipboard.svg",
+            "Copy layout elements to the clipboard. This command will be added here.",
+            shortcut: "CO, CP");
+        CutButton = CreateCommand(
+            "Cut",
+            "Cut.svg",
+            "Cut layout elements. This command will be added here.",
+            shortcut: "Ctrl+X");
+        TrimButton = CreateCommand(
+            "Trim",
+            "Trim.svg",
+            "Trim layout elements. This command will be added here.",
+            shortcut: "TR");
+        FilletButton = CreateCommand(
+            "Add Radius",
+            "Add Radius.svg",
+            "Add a radius to a corner. This command will be added here.",
+            shortcut: "F");
         ZoomWindowButton = CreateCommand(
             "Zoom Window",
             "Zoom Window.svg",
@@ -66,121 +121,108 @@ internal sealed class RibbonMenu : Panel
         ZoomWindowButton.CheckOnClick = true;
 
         _tabBar = new RibbonTabBar(CreateQuickAccess(OpenButton, SaveButton, RecentButton));
-        _mainToolbar = CreateMainToolbar(
-            CreateCommand(
-                "Area",
-                "Area.svg",
-                "Define a layout area. This command will be added here."),
-            CreateCommand(
-                "Straight Route",
-                "Straight Route.svg",
-                "Draw a straight route. This command will be added here."),
-            CreateCommand(
-                "Curved Route",
-                "Curved Route.svg",
-                "Draw a curved route. This command will be added here."),
-            CreateCommand(
-                "Destination",
-                "Destination.svg",
-                "Place a destination. This command will be added here."),
-            CreateCommand(
-                "Delete",
-                "Delete.svg",
-                "Delete layout elements. This command will be added here."),
-            CreateSeparator(),
-            CreateCommand(
-                "Break Routes",
-                "Break Routes.svg",
-                "Break a route into parts. This command will be added here."),
-            CreateCommand(
-                "Merge Routes",
-                "Merge Routes.svg",
-                "Merge routes together. This command will be added here."),
-            CreateCommand(
-                "Move",
-                "Move.svg",
-                "Move layout elements. This command will be added here."),
-            CreateCommand(
-                "Rotate",
-                "Rotate.svg",
-                "Rotate layout elements. This command will be added here."),
-            CreateCommand(
-                "Mirror",
-                "Mirror.svg",
-                "Mirror layout elements. This command will be added here."),
-            CreateCommand(
-                "Lenghten Route",
-                "Lenghten Route.svg",
-                "Lengthen a route. This command will be added here."),
-            CreateCommand(
-                "Copy to Clipboard",
-                "Copy to Clipboard.svg",
-                "Copy layout elements to the clipboard. This command will be added here."),
-            CreateCommand(
-                "Paste",
-                "Paste.svg",
-                "Paste layout elements. This command will be added here."),
-            CreateCommand(
-                "Cut",
-                "Cut.svg",
-                "Cut layout elements. This command will be added here."),
-            CreateCommand(
-                "Trim",
-                "Trim.svg",
-                "Trim layout elements. This command will be added here."),
-            CreateCommand(
-                "Add Radius",
-                "Add Radius.svg",
-                "Add a radius to a corner. This command will be added here."),
-            CreateCommand(
-                "Add Center",
-                "Add Center.svg",
-                "Add a center mark. This command will be added here."),
-            CreateSeparator(),
-            ZoomExtentsButton,
-            ZoomWindowButton,
-            GridButton,
-            CreateCommand(
-                "Node Snap",
-                "Node Snap.svg",
-                "Snap to nodes. This command will be added here."),
-            CreateCommand(
-                "Geometric Snap",
-                "Geometric Snap.svg",
-                "Snap to geometric points. This command will be added here."),
-            CreateCommand(
-                "Orthogonal Snap",
-                "Orthogonal Snap.svg",
-                "Constrain drawing to orthogonal directions. This command will be added here."),
-            CreateCommand(
-                "Angle Snap",
-                "Angle Snap.svg",
-                "Snap to angles. This command will be added here."),
-            CreateCommand(
-                "Add Dimension",
-                "Add Dimension.svg",
-                "Add a dimension. This command will be added here."),
-            CreateCommand(
-                "Measure",
-                "Measure.svg",
-                "Measure a distance. This command will be added here."),
-            CreateCommand(
-                "Properties",
-                "Properties.svg",
-                "Show element properties. This command will be added here."),
-            CreateCommand(
-                "Add From Library",
-                "Add From Library.svg",
-                "Add an item from the library. This command will be added here."),
-            CreateCommand(
-                "Search",
-                "Search.svg",
-                "Search the layout. This command will be added here."),
-            LayersButton,
-            CreateCommand(
-                "Filter",
-                "Filter.svg",
-                "Filter layout items. This command will be added here."));
+        _mainToolbar = CreateGroupedToolbar(
+            ("Analysis Elements",
+            [
+                CreateCommand(
+                    "Area",
+                    "Area.svg",
+                    "Define a layout area. This command will be added here."),
+                StraightRouteButton,
+                CreateCommand(
+                    "Curved Route",
+                    "Curved Route.svg",
+                    "Draw a curved route. This command will be added here."),
+                CreateCommand(
+                    "Destination",
+                    "Destination.svg",
+                    "Place a destination. This command will be added here."),
+                CreateCommand(
+                    "Delete",
+                    "Delete.svg",
+                    "Delete layout elements. This command will be added here."),
+            ]),
+            ("Modify Elements",
+            [
+                CreateCommand(
+                    "Break Routes",
+                    "Break Routes.svg",
+                    "Break a route into parts. This command will be added here."),
+                CreateCommand(
+                    "Merge Routes",
+                    "Merge Routes.svg",
+                    "Merge routes together. This command will be added here."),
+                MoveButton,
+                RotateButton,
+                CreateCommand(
+                    "Mirror",
+                    "Mirror.svg",
+                    "Mirror layout elements. This command will be added here."),
+                CreateCommand(
+                    "Lenghten Route",
+                    "Lenghten Route.svg",
+                    "Lengthen a route. This command will be added here."),
+                TrimButton,
+                FilletButton,
+                CreateCommand(
+                    "Add Chamfer",
+                    "Add Chamfer.svg",
+                    "Add a chamfer to a corner. This command will be added here."),
+            ]),
+            ("Clipboard",
+            [
+                CopyElementsButton,
+                CreateCommand(
+                    "Paste",
+                    "Paste.svg",
+                    "Paste layout elements. This command will be added here.",
+                    shortcut: "Ctrl+V"),
+                CutButton,
+            ]),
+            ("View",
+            [
+                ZoomExtentsButton,
+                ZoomWindowButton,
+            ]),
+            ("Precision Tools",
+            [
+                GridButton,
+                NodeSnapButton,
+                GeometricSnapButton,
+                OrthogonalSnapButton,
+                CreateCommand(
+                    "Angle Snap",
+                    "Angle Snap.svg",
+                    "Snap to angles. This command will be added here."),
+            ]),
+            ("Other Tools",
+            [
+                CreateCommand(
+                    "Add Dimension",
+                    "Add Dimension.svg",
+                    "Add a dimension. This command will be added here."),
+                CreateCommand(
+                    "Measure",
+                    "Measure.svg",
+                    "Measure a distance. This command will be added here."),
+                CreateCommand(
+                    "Properties",
+                    "Properties.svg",
+                    "Show element properties. This command will be added here."),
+                CreateCommand(
+                    "Add From Library",
+                    "Add From Library.svg",
+                    "Add an item from the library. This command will be added here."),
+                CreateCommand(
+                    "Search",
+                    "Search.svg",
+                    "Search the layout. This command will be added here."),
+                LayersButton,
+                CreateCommand(
+                    "Filter",
+                    "Filter.svg",
+                    "Filter layout items. This command will be added here."),
+            ]));
         _simulationToolbar = CreateCompactToolbar(
             CreateCommand(
                 "Reset",
@@ -234,6 +276,31 @@ internal sealed class RibbonMenu : Panel
     public ToolStripButton ZoomExtentsButton { get; }
     public ToolStripButton GridButton { get; }
     public ToolStripButton ZoomWindowButton { get; }
+    public ToolStripButton NodeSnapButton { get; }
+    public ToolStripButton GeometricSnapButton { get; }
+    public ToolStripButton OrthogonalSnapButton { get; }
+    public ToolStripButton StraightRouteButton { get; }
+    public ToolStripButton MoveButton { get; }
+    public ToolStripButton RotateButton { get; }
+    public ToolStripButton CopyElementsButton { get; }
+    public ToolStripButton CutButton { get; }
+    public ToolStripButton TrimButton { get; }
+    public ToolStripButton FilletButton { get; }
+
+    public ToolStripButton? FindCommand(string name)
+    {
+        foreach (ToolStrip strip in _commandStrips)
+        {
+            ToolStripButton? match = strip.Items.OfType<ToolStripButton>()
+                .FirstOrDefault(item => string.Equals(item.Text, name, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
 
     public event EventHandler? UndoClicked;
     public event EventHandler? RedoClicked;
@@ -319,7 +386,38 @@ internal sealed class RibbonMenu : Panel
         return strip;
     }
 
-    private static ToolStrip CreateMainToolbar(params ToolStripItem[] items)
+    private Control CreateGroupedToolbar(params (string Title, ToolStripItem[] Items)[] groups)
+    {
+        var host = new Panel
+        {
+            Height = 68,
+            BackColor = CommandBarColor,
+            Padding = new Padding(2, 0, 2, 0),
+        };
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = CommandBarColor,
+            AutoScroll = true,
+            AutoScrollMinSize = new Size(0, 0),
+            Padding = Padding.Empty,
+            Margin = Padding.Empty,
+        };
+        for (int index = 0; index < groups.Length; index++)
+        {
+            flow.Controls.Add(CreateCommandGroup(
+                groups[index].Title,
+                groups[index].Items,
+                showDivider: index < groups.Length - 1));
+        }
+
+        host.Controls.Add(flow);
+        return host;
+    }
+
+    private Control CreateCommandGroup(string title, ToolStripItem[] items, bool showDivider)
     {
         var strip = new ToolStrip
         {
@@ -327,30 +425,74 @@ internal sealed class RibbonMenu : Panel
             BackColor = CommandBarColor,
             ForeColor = Color.WhiteSmoke,
             Renderer = new DarkToolStripRenderer(),
-            Padding = new Padding(6, 6, 6, 6),
-            AutoSize = false,
-            Height = 52,
+            Padding = new Padding(4, 4, 4, 0),
+            AutoSize = true,
+            Dock = DockStyle.None,
             ImageScalingSize = new Size(24, 24),
             ShowItemToolTips = false,
-            CanOverflow = true,
+            CanOverflow = false,
         };
         if (items.Length > 0)
         {
             strip.Items.AddRange(items);
         }
+
         foreach (ToolStripItem item in strip.Items)
         {
             if (item is not ToolStripButton button)
             {
                 continue;
             }
+
             button.DisplayStyle = ToolStripItemDisplayStyle.Image;
             button.AutoToolTip = false;
             button.Margin = new Padding(1, 2, 1, 2);
             button.Padding = new Padding(4);
         }
+
         _ = CadToolTip.Attach(strip);
-        return strip;
+        _commandStrips.Add(strip);
+
+        using var labelFont = new Font("Segoe UI", 7.25f);
+        int labelWidth = TextRenderer.MeasureText(title, labelFont).Width + 16;
+        int stripWidth = strip.GetPreferredSize(Size.Empty).Width;
+        int width = Math.Max(labelWidth, stripWidth) + (showDivider ? 7 : 4);
+
+        var group = new Panel
+        {
+            Width = width,
+            Height = 66,
+            BackColor = CommandBarColor,
+            Margin = new Padding(0),
+            Padding = Padding.Empty,
+        };
+        var label = new Label
+        {
+            Text = title,
+            Dock = DockStyle.Bottom,
+            Height = 16,
+            TextAlign = ContentAlignment.TopCenter,
+            ForeColor = Color.FromArgb(168, 170, 176),
+            Font = new Font("Segoe UI", 7.25f),
+            BackColor = CommandBarColor,
+        };
+        strip.Location = new Point(2, 1);
+        strip.Width = width - (showDivider ? 8 : 4);
+        strip.Height = 46;
+        group.Controls.Add(strip);
+        group.Controls.Add(label);
+        if (showDivider)
+        {
+            group.Controls.Add(new Panel
+            {
+                Dock = DockStyle.Right,
+                Width = 1,
+                BackColor = BorderColor,
+                Margin = new Padding(0),
+            });
+        }
+
+        return group;
     }
 
     private static ToolStrip CreateCompactToolbar(params ToolStripItem[] items)
@@ -465,6 +607,8 @@ internal sealed class RibbonMenu : Panel
         private bool _settingsPressed;
         private int _windowHot = -1;
         private int _windowPressed = -1;
+        private bool _restoreDrag;
+        private Point _pressLocal;
         private Form? _host;
         private readonly CadToolTip _commandTip;
 
@@ -654,6 +798,12 @@ internal sealed class RibbonMenu : Panel
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
+            if (_restoreDrag)
+            {
+                TryRestoreDrag(e);
+                return;
+            }
+
             LayoutWindowButtons();
             bool overUndo = !_undoBounds.IsEmpty && _undoBounds.Contains(e.Location);
             bool overRedo = !_redoBounds.IsEmpty && _redoBounds.Contains(e.Location);
@@ -677,6 +827,11 @@ internal sealed class RibbonMenu : Panel
 
         private (CommandTip Tip, Rectangle Anchor)? HitCommandTip(Point local)
         {
+            if (_restoreDrag)
+            {
+                return null;
+            }
+
             LayoutWindowButtons();
             if (!_undoBounds.IsEmpty && _undoBounds.Contains(local))
             {
@@ -784,7 +939,24 @@ internal sealed class RibbonMenu : Panel
                 _windowPressed = window;
                 Capture = true;
                 Invalidate();
+                return;
             }
+
+            Form? host = _host ?? FindForm();
+            if (host is null || HitCaption(e.Location) != CaptionRegion.Drag)
+            {
+                return;
+            }
+
+            if (host.WindowState == FormWindowState.Maximized)
+            {
+                _restoreDrag = true;
+                _pressLocal = e.Location;
+                Capture = true;
+                return;
+            }
+
+            CaptionFrame.BeginNativeDrag(host);
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
@@ -822,6 +994,7 @@ internal sealed class RibbonMenu : Panel
             }
             if (_windowPressed < 0)
             {
+                _restoreDrag = false;
                 Capture = false;
                 return;
             }
@@ -848,6 +1021,46 @@ internal sealed class RibbonMenu : Panel
                     host.Close();
                     break;
             }
+        }
+
+        protected override void OnMouseDoubleClick(MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left || HitCaption(e.Location) != CaptionRegion.Drag)
+            {
+                return;
+            }
+
+            Form? host = _host ?? FindForm();
+            if (host is null)
+            {
+                return;
+            }
+
+            host.WindowState = host.WindowState == FormWindowState.Maximized
+                ? FormWindowState.Normal
+                : FormWindowState.Maximized;
+        }
+
+        private void TryRestoreDrag(MouseEventArgs e)
+        {
+            Form? host = _host ?? FindForm();
+            if (host is null || e.Button != MouseButtons.Left)
+            {
+                _restoreDrag = false;
+                Capture = false;
+                return;
+            }
+
+            Size threshold = SystemInformation.DragSize;
+            if (Math.Abs(e.X - _pressLocal.X) <= threshold.Width
+                && Math.Abs(e.Y - _pressLocal.Y) <= threshold.Height)
+            {
+                return;
+            }
+
+            _restoreDrag = false;
+            Capture = false;
+            CaptionFrame.RestoreAndDrag(host, PointToScreen(e.Location), e.Y);
         }
 
         private void PlaceCommands(int x, int contentTop, int contentHeight)
