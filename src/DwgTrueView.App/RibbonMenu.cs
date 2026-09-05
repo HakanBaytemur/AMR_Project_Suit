@@ -1,23 +1,22 @@
 namespace DwgTrueView.App;
 
 /// <summary>
-/// Dark CAD chrome: the mini toolbar shares the title bar; edit and view
-/// commands live underneath; compact simulation commands sit under that.
+/// Dark CAD chrome: the mini toolbar shares the title bar; grouped
+/// commands including simulation live on the main ribbon.
 /// </summary>
 internal sealed class RibbonMenu : Panel
 {
-    private static readonly Color TabBarColor = Color.FromArgb(45, 47, 54);
-    private static readonly Color CommandBarColor = Color.FromArgb(42, 45, 49);
-    private static readonly Color BorderColor = Color.FromArgb(58, 60, 68);
+    private static readonly Color TabBarColor = Color.FromArgb(0x22, 0x29, 0x33);
+    private static readonly Color CommandBarColor = Color.FromArgb(0x3B, 0x44, 0x53);
+    private static readonly Color BorderColor = Color.FromArgb(0x22, 0x29, 0x33);
 
     private readonly RibbonTabBar _tabBar;
     private readonly Control _mainToolbar;
-    private readonly ToolStrip _simulationToolbar;
     private readonly List<ToolStrip> _commandStrips = [];
 
     public RibbonMenu()
     {
-        Height = 148;
+        Height = 114;
         BackColor = CommandBarColor;
         OpenButton = CreateCommand(
             "Open File",
@@ -222,47 +221,41 @@ internal sealed class RibbonMenu : Panel
                     "Filter",
                     "Filter.svg",
                     "Filter layout items. This command will be added here."),
+            ]),
+            ("Simulation Control",
+            [
+                CreateCommand(
+                    "Reset",
+                    "Reset.svg",
+                    "Reset the simulation. This command will be added here."),
+                CreateCommand(
+                    "Start",
+                    "Start.svg",
+                    "Start the simulation. This command will be added here."),
+                CreateCommand(
+                    "Stop",
+                    "Stop.svg",
+                    "Stop the simulation. This command will be added here."),
+                CreateCommand(
+                    "Fast Forward",
+                    "Fast Forward.svg",
+                    "Fast-forward the simulation. This command will be added here."),
+                CreateCommand(
+                    "Skip",
+                    "Skip.svg",
+                    "Skip ahead in the simulation. This command will be added here."),
+                CreateCommand(
+                    "Step",
+                    "Step.svg",
+                    "Step the simulation forward. This command will be added here."),
             ]));
-        _simulationToolbar = CreateCompactToolbar(
-            CreateCommand(
-                "Reset",
-                "Reset.svg",
-                "Reset the simulation. This command will be added here.",
-                compact: true),
-            CreateCommand(
-                "Start",
-                "Start.svg",
-                "Start the simulation. This command will be added here.",
-                compact: true),
-            CreateCommand(
-                "Stop",
-                "Stop.svg",
-                "Stop the simulation. This command will be added here.",
-                compact: true),
-            CreateCommand(
-                "Fast Forward",
-                "Fast Forward.svg",
-                "Fast-forward the simulation. This command will be added here.",
-                compact: true),
-            CreateCommand(
-                "Skip",
-                "Skip.svg",
-                "Skip ahead in the simulation. This command will be added here.",
-                compact: true),
-            CreateCommand(
-                "Step",
-                "Step.svg",
-                "Step the simulation forward. This command will be added here.",
-                compact: true));
 
         _tabBar.Dock = DockStyle.Top;
         _tabBar.Height = 43;
         _tabBar.UndoClicked += (_, _) => UndoClicked?.Invoke(this, EventArgs.Empty);
         _tabBar.RedoClicked += (_, _) => RedoClicked?.Invoke(this, EventArgs.Empty);
-        _mainToolbar.Dock = DockStyle.Top;
-        _simulationToolbar.Dock = DockStyle.Fill;
+        _mainToolbar.Dock = DockStyle.Fill;
 
-        Controls.Add(_simulationToolbar);
         Controls.Add(_mainToolbar);
         Controls.Add(_tabBar);
     }
@@ -390,7 +383,7 @@ internal sealed class RibbonMenu : Panel
     {
         var host = new Panel
         {
-            Height = 68,
+            Height = 70,
             BackColor = CommandBarColor,
             Padding = new Padding(2, 0, 2, 0),
         };
@@ -453,7 +446,7 @@ internal sealed class RibbonMenu : Panel
         _ = CadToolTip.Attach(strip);
         _commandStrips.Add(strip);
 
-        using var labelFont = new Font("Segoe UI", 7.25f);
+        using var labelFont = new Font("Segoe UI", 9f);
         int labelWidth = TextRenderer.MeasureText(title, labelFont).Width + 16;
         int stripWidth = strip.GetPreferredSize(Size.Empty).Width;
         int width = Math.Max(labelWidth, stripWidth) + (showDivider ? 7 : 4);
@@ -461,7 +454,7 @@ internal sealed class RibbonMenu : Panel
         var group = new Panel
         {
             Width = width,
-            Height = 66,
+            Height = 68,
             BackColor = CommandBarColor,
             Margin = new Padding(0),
             Padding = Padding.Empty,
@@ -470,10 +463,10 @@ internal sealed class RibbonMenu : Panel
         {
             Text = title,
             Dock = DockStyle.Bottom,
-            Height = 16,
+            Height = 18,
             TextAlign = ContentAlignment.TopCenter,
-            ForeColor = Color.FromArgb(168, 170, 176),
-            Font = new Font("Segoe UI", 7.25f),
+            ForeColor = Color.FromArgb(220, 222, 228),
+            Font = new Font("Segoe UI", 9f),
             BackColor = CommandBarColor,
         };
         strip.Location = new Point(2, 1);
@@ -493,28 +486,6 @@ internal sealed class RibbonMenu : Panel
         }
 
         return group;
-    }
-
-    private static ToolStrip CreateCompactToolbar(params ToolStripItem[] items)
-    {
-        var strip = new ToolStrip
-        {
-            GripStyle = ToolStripGripStyle.Hidden,
-            BackColor = TabBarColor,
-            ForeColor = Color.WhiteSmoke,
-            Renderer = new DarkToolStripRenderer(TabBarColor),
-            Padding = new Padding(8, 1, 8, 1),
-            AutoSize = false,
-            Height = 36,
-            ImageScalingSize = new Size(20, 20),
-            ShowItemToolTips = false,
-        };
-        if (items.Length > 0)
-        {
-            strip.Items.AddRange(items);
-        }
-        _ = CadToolTip.Attach(strip);
-        return strip;
     }
 
     private static ToolStripButton CreateCommand(

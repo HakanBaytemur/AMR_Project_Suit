@@ -16,7 +16,7 @@ internal sealed class WorkspaceTabStrip : Panel
     private const int PlusSize = 28;
     private const int ScrollButton = 22;
     private const int CornerRadius = 10;
-    private static readonly Color StripColor = Color.FromArgb(24, 26, 29);
+    private static readonly Color StripColor = Color.FromArgb(0x22, 0x29, 0x33);
     private static readonly Color InactiveColor = Color.FromArgb(36, 38, 42);
     private static readonly Color HoverColor = Color.FromArgb(52, 56, 62);
     private static readonly Color ActiveColor = Color.FromArgb(42, 45, 49);

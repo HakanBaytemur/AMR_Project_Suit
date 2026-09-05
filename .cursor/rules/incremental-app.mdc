@@ -1,0 +1,37 @@
+---
+description: Incremental updates, no regressions, embedded assets
+alwaysApply: true
+---
+
+# Incremental AMR / IntraLayout Studio work
+
+This is an existing WinForms .NET 8 desktop app. Every task is an incremental update. Never rewrite working architecture unless Hakan explicitly asks.
+
+## Scope
+
+- Change only the files and blocks required for the requested task.
+- Prefer small, surgical edits over refactors.
+- Do not convert the app to WPF/MVVM unless asked. Use the existing WinForms path (caption hit-test / `SC_MOVE`, `CadToolTip`, `RibbonMenu`).
+
+## Do not break
+
+Do not alter, refactor, or remove these unless the task is specifically about them and there is no other way:
+
+- Custom title bar and snap: `CaptionFrame.cs`, caption mouse handlers in `RibbonMenu` (`BeginNativeDrag`, `RestoreAndDrag`, drag-to-restore, double-click maximize)
+- Global shortcuts: `CadShortcuts.cs`, `MainForm.ProcessCmdKey` (keep text-field exclusion)
+- Working toolbars, buttons, and rich tooltips: `RibbonMenu.cs`, `CadToolTip.cs`
+
+When touching shared chrome, preserve existing bindings and behavior. If a change could regress snap, shortcuts, or tips, leave those paths untouched.
+
+## Assets
+
+- Never load icons from Downloads or other machine-local paths.
+- Put files in `Assets/Icons` or `Assets/Branding`.
+- Keep them Embedded Resource / Content as in `DwgTrueView.App.csproj`.
+- Load only through `AppIcons` (assembly + output copy).
+
+## Approach
+
+- Use the simplest framework-native option that already works here.
+- Avoid new low-level Win32 unless the existing caption/snap path already requires it.
+- When showing code to Hakan, give complete methods or files, not scattered fragments.

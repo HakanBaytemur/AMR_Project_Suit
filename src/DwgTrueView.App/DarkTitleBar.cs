@@ -23,7 +23,7 @@ internal static class DarkTitleBar
             int useDark = 1;
             _ = DwmSetWindowAttribute(form.Handle, UseImmersiveDarkMode, ref useDark, sizeof(int));
 
-            int caption = ToColorRef(Color.FromArgb(45, 47, 54));
+            int caption = ToColorRef(Color.FromArgb(0x22, 0x29, 0x33));
             _ = DwmSetWindowAttribute(form.Handle, CaptionColor, ref caption, sizeof(int));
 
             int text = ToColorRef(Color.FromArgb(209, 209, 209));
