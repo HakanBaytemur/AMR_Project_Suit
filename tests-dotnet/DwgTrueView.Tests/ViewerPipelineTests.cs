@@ -55,6 +55,33 @@ public sealed class ViewerPipelineTests
     }
 
     [Fact]
+    public void FitScreenRectZoomsToTheDraggedWindow()
+    {
+        var camera = new ViewCamera2D();
+        var viewport = new Vector2(200, 100);
+        camera.FitScreenRect(new Vector2(50, 25), new Vector2(150, 75), viewport, margin: 0);
+        Assert.Equal(0.5f, camera.UnitsPerPixel, precision: 5);
+        Assert.Equal(Vector2.Zero, camera.Center);
+    }
+
+    [Fact]
+    public void RestorePutsTheCameraBackToAPreviousView()
+    {
+        var camera = new ViewCamera2D();
+        camera.Fit(
+            new CadBounds2(new Vector2(-50, -25), new Vector2(50, 25)),
+            new Vector2(1000, 500),
+            margin: 0);
+        Vector2 center = camera.Center;
+        float scale = camera.UnitsPerPixel;
+        camera.PanPixels(new Vector2(80, 40));
+        camera.Restore(center, scale);
+        Assert.Equal(center, camera.Center);
+        Assert.Equal(scale, camera.UnitsPerPixel);
+        Assert.True(camera.Matches(center, scale));
+    }
+
+    [Fact]
     public void SuppliedDxfBecomesOneContiguousLayerSortedBuffer()
     {
         string path = Path.Combine(

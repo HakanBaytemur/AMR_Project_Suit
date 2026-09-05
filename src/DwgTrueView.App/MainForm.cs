@@ -1,3 +1,4 @@
+using System.Numerics;
 using DwgTrueView.Cad;
 using DwgTrueView.Core;
 using DwgTrueView.Rendering.DirectX;
@@ -10,21 +11,32 @@ public sealed class MainForm : Form
     private readonly CadViewportControl _viewport = new();
     private readonly WorkspaceTabCollection _workspace = new();
     private readonly WorkspaceTabStrip _tabs = new();
+    private readonly RibbonMenu _ribbon = new();
+    private readonly RecentFileList _recent = new();
     private readonly ViewCamera2D _emptyCamera = new();
-    private readonly ToolStripButton _openButton;
-    private readonly ToolStripButton _zoomExtentsButton;
-    private readonly ToolStripButton _gridButton;
-    private readonly ToolStripButton _layersButton;
     private readonly ToolStripStatusLabel _statusText = new();
     private readonly ToolStripStatusLabel _coordinates = new();
     private readonly ToolStripProgressBar _progress = new();
+    private readonly UndoStack _undo = new();
     private LayerPropertiesForm? _layerForm;
     private CancellationTokenSource _shutdown = new();
     private int _loadsInFlight;
+    private bool _applyingUndo;
 
     public MainForm()
     {
-        Text = "DWG TrueView Lite V2";
+        Text = ProductInfo.Name;
+        ShowIcon = true;
+        try
+        {
+            if (Environment.ProcessPath is { } exe)
+            {
+                Icon = Icon.ExtractAssociatedIcon(exe);
+            }
+        }
+        catch (ArgumentException)
+        {
+        }
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(960, 600);
         Size = new Size(1440, 900);
@@ -34,30 +46,33 @@ public sealed class MainForm : Form
         KeyPreview = true;
         AllowDrop = true;
 
-        var toolbar = new ToolStrip
+        _ribbon.BindCommands(
+            OnOpenClicked,
+            OnSaveClicked,
+            OnLayerPropertiesClicked,
+            OnCopyClicked,
+            OnPasteClicked,
+            (_, _) => _viewport.ZoomExtents(),
+            OnGridChanged,
+            OnZoomWindowChanged);
+        _ribbon.SetRecentFiles(_recent.Paths, path => _ = OpenPathAsync(path));
+        _ribbon.UndoClicked += OnUndoClicked;
+        _ribbon.RedoClicked += OnRedoClicked;
+        _undo.Changed += (_, _) =>
         {
-            GripStyle = ToolStripGripStyle.Hidden,
-            BackColor = Color.FromArgb(42, 45, 49),
-            ForeColor = Color.WhiteSmoke,
-            Renderer = new DarkToolStripRenderer(),
-            Padding = new Padding(8, 5, 8, 5),
-            AutoSize = true,
+            _ribbon.SetUndoEnabled(_undo.CanUndo);
+            _ribbon.SetRedoEnabled(_undo.CanRedo);
         };
-        _openButton = CreateToolbarButton("Open DWG/DXF", OnOpenClicked);
-        _zoomExtentsButton = CreateToolbarButton("Zoom Extents", (_, _) => _viewport.ZoomExtents());
-        _gridButton = CreateToolbarButton("Grid", static (_, _) => { });
-        _gridButton.CheckOnClick = true;
-        _gridButton.Checked = true;
-        _gridButton.CheckedChanged += (_, _) => _viewport.GridVisible = _gridButton.Checked;
-        _layersButton = CreateToolbarButton("Layer Properties", OnLayerPropertiesClicked);
-        toolbar.Items.AddRange(
-        [
-            _openButton,
-            new ToolStripSeparator(),
-            _zoomExtentsButton,
-            _gridButton,
-            _layersButton,
-        ]);
+        _ribbon.SetUndoEnabled(false);
+        _ribbon.SetRedoEnabled(false);
+        _viewport.CameraUndoCommitted += OnCameraUndoCommitted;
+        _viewport.ZoomWindowArmedChanged += armed =>
+        {
+            if (_ribbon.ZoomWindowButton.Checked != armed)
+            {
+                _ribbon.ZoomWindowButton.Checked = armed;
+            }
+        };
 
         _tabs.TabSelected += OnTabSelected;
         _tabs.TabClosed += OnTabClosed;
@@ -83,7 +98,7 @@ public sealed class MainForm : Form
         };
         _statusText.Spring = true;
         _statusText.TextAlign = ContentAlignment.MiddleLeft;
-        _statusText.Text = "Ready — wheel zoom, middle-button pan, Home/F zoom extents";
+        _statusText.Text = "Ready — wheel zoom, Zoom Window drag, middle-button pan, Home/F zoom extents";
         _coordinates.AutoSize = false;
         _coordinates.Width = 220;
         _coordinates.TextAlign = ContentAlignment.MiddleRight;
@@ -95,14 +110,22 @@ public sealed class MainForm : Form
         Controls.Add(_viewport);
         Controls.Add(status);
         Controls.Add(_tabs);
-        Controls.Add(toolbar);
+        Controls.Add(_ribbon);
         status.Dock = DockStyle.Bottom;
         _tabs.Dock = DockStyle.Top;
-        toolbar.Dock = DockStyle.Top;
+        _ribbon.Dock = DockStyle.Top;
+        _ribbon.AttachHost(this);
+        WindowState = FormWindowState.Maximized;
 
         KeyDown += OnFormKeyDown;
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
+        Activated += (_, _) => TaskbarHighlight.StopFlash(this);
+        HandleCreated += (_, _) =>
+        {
+            DarkTitleBar.Apply(this);
+            CaptionFrame.NotifyChanged(this);
+        };
         FormClosing += (_, _) =>
         {
             _shutdown.Cancel();
@@ -111,6 +134,16 @@ public sealed class MainForm : Form
                 _layerForm.Close();
             }
         };
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        if (CaptionFrame.Process(this, _ribbon, ref message))
+        {
+            return;
+        }
+
+        base.WndProc(ref message);
     }
 
     public async Task OpenPathAsync(string path)
@@ -134,11 +167,14 @@ public sealed class MainForm : Form
         var progress = new Progress<CadLoadProgress>(
             value =>
             {
-                _progress.Value = Math.Clamp(value.Percent, 0, 100);
+                int percent = Math.Clamp(value.Percent, 0, 100);
+                _progress.Value = percent;
+                TaskbarHighlight.SetProgress(this, percent);
                 _statusText.Text = value.TotalEntities > 0
                     ? $"{value.Stage} — {value.ProcessedEntities:N0}/{value.TotalEntities:N0}"
                     : value.Stage;
             });
+        bool succeeded = false;
         try
         {
             PackedCadDrawing drawing = await _reader.ReadAsync(
@@ -152,8 +188,24 @@ public sealed class MainForm : Form
             }
             void commit()
             {
-                _workspace.Add(drawing);
+                DrawingWorkspace tab = _workspace.Add(drawing);
+                int index = _workspace.IndexOf(tab.Id);
                 PresentActive(fitExtents: true);
+                _recent.Remember(path);
+                _ribbon.SetRecentFiles(_recent.Paths, recentPath => _ = OpenPathAsync(recentPath));
+                Record("Open",
+                    () =>
+                    {
+                        if (_workspace.Close(tab.Id))
+                        {
+                            PresentActive(fitExtents: false);
+                        }
+                    },
+                    () =>
+                    {
+                        _workspace.Insert(tab, index, activate: true);
+                        PresentActive(fitExtents: false);
+                    });
             }
             if (InvokeRequired)
             {
@@ -163,6 +215,7 @@ public sealed class MainForm : Form
             {
                 commit();
             }
+            succeeded = true;
         }
         catch (OperationCanceledException)
         {
@@ -171,6 +224,7 @@ public sealed class MainForm : Form
         catch (Exception exception)
         {
             _statusText.Text = "Could not open drawing";
+            TaskbarHighlight.NotifyError(this);
             MessageBox.Show(
                 this,
                 FormatLoadError(exception),
@@ -181,6 +235,10 @@ public sealed class MainForm : Form
         finally
         {
             SetLoading(false);
+            if (succeeded)
+            {
+                TaskbarHighlight.NotifySuccess(this);
+            }
         }
     }
 
@@ -194,7 +252,6 @@ public sealed class MainForm : Form
                 tab.LayerVisibility,
                 fitExtents);
             BindLayers(tab);
-            Text = $"DWG TrueView Lite V2 — {tab.FileName}";
             PackedCadDrawing drawing = tab.Drawing;
             _statusText.Text =
                 $"{drawing.SegmentCount:N0} segments  |  "
@@ -205,8 +262,7 @@ public sealed class MainForm : Form
 
         _viewport.PresentSession(null, _emptyCamera, [], fitExtents: false);
         BindLayers(null);
-        Text = "DWG TrueView Lite V2";
-        _statusText.Text = "Ready — wheel zoom, middle-button pan, Home/F zoom extents";
+        _statusText.Text = "Ready — wheel zoom, Zoom Window drag, middle-button pan, Home/F zoom extents";
     }
 
     private void OnTabSelected(Guid id)
@@ -219,15 +275,39 @@ public sealed class MainForm : Form
 
     private void OnTabClosed(Guid id)
     {
+        DrawingWorkspace? tab = _workspace.Find(id);
+        int index = _workspace.IndexOf(id);
+        if (tab is null || index < 0)
+        {
+            return;
+        }
         if (_workspace.Close(id))
         {
+            Record("Close tab",
+                () =>
+                {
+                    _workspace.Insert(tab, index, activate: true);
+                    PresentActive(fitExtents: false);
+                },
+                () =>
+                {
+                    if (_workspace.Close(tab.Id))
+                    {
+                        PresentActive(fitExtents: false);
+                    }
+                });
             PresentActive(fitExtents: false);
         }
     }
 
     private void OnTabMoved(Guid id, int index)
     {
-        _workspace.Move(id, index);
+        int from = _workspace.IndexOf(id);
+        if (from < 0 || !_workspace.Move(id, index))
+        {
+            return;
+        }
+        Record("Tab order", () => _workspace.Move(id, from), () => _workspace.Move(id, index));
     }
 
     private void OnOpenClicked(object? sender, EventArgs e)
@@ -269,7 +349,7 @@ public sealed class MainForm : Form
         if (form.Visible)
         {
             form.Hide();
-            _layersButton.Checked = false;
+            _ribbon.LayersButton.Checked = false;
             return;
         }
         if (form.WindowState == FormWindowState.Minimized)
@@ -279,7 +359,7 @@ public sealed class MainForm : Form
         BindLayers(_workspace.Active);
         form.Show(this);
         form.Activate();
-        _layersButton.Checked = true;
+        _ribbon.LayersButton.Checked = true;
     }
 
     private LayerPropertiesForm EnsureLayerForm()
@@ -290,17 +370,27 @@ public sealed class MainForm : Form
         }
         var form = new LayerPropertiesForm();
         form.VisibilityChanged += (layerId, visible) =>
+        {
+            bool previous = _viewport.IsLayerVisible(layerId);
             _viewport.SetLayerVisible(layerId, visible);
+            if (previous == visible)
+            {
+                return;
+            }
+            Record("Layer",
+                () => ApplyLayerVisibility(layerId, previous),
+                () => ApplyLayerVisibility(layerId, visible));
+        };
         form.FormClosed += (_, _) =>
         {
-            _layersButton.Checked = false;
+            _ribbon.LayersButton.Checked = false;
             _layerForm = null;
         };
         form.VisibleChanged += (_, _) =>
         {
             if (_layerForm is { IsDisposed: false })
             {
-                _layersButton.Checked = _layerForm.Visible;
+                _ribbon.LayersButton.Checked = _layerForm.Visible;
             }
         };
         _layerForm = form;
@@ -310,6 +400,212 @@ public sealed class MainForm : Form
             : PointToScreen(new Point(24, 80));
         form.Location = origin;
         return form;
+    }
+
+    private void OnSaveClicked(object? sender, EventArgs e)
+    {
+        if (_workspace.Active is not { } tab)
+        {
+            MessageBox.Show(
+                this,
+                "Open a drawing before saving.",
+                "Save",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        string source = tab.SourcePath;
+        string extension = Path.GetExtension(source);
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save drawing copy",
+            FileName = tab.FileName,
+            Filter = extension.Equals(".dxf", StringComparison.OrdinalIgnoreCase)
+                ? "DXF (*.dxf)|*.dxf|DWG (*.dwg)|*.dwg"
+                : "DWG (*.dwg)|*.dwg|DXF (*.dxf)|*.dxf",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+        try
+        {
+            File.Copy(source, dialog.FileName, overwrite: true);
+            _statusText.Text = $"Saved a copy of the source file — {Path.GetFileName(dialog.FileName)}";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(
+                this,
+                exception.Message,
+                "Save error",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private void OnCopyClicked(object? sender, EventArgs e)
+    {
+        Rectangle screen = _viewport.RectangleToScreen(_viewport.ClientRectangle);
+        if (screen.Width <= 1 || screen.Height <= 1)
+        {
+            return;
+        }
+        using var bitmap = new Bitmap(screen.Width, screen.Height);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen(screen.Location, Point.Empty, screen.Size);
+        }
+        Clipboard.SetImage((Image)bitmap.Clone());
+        _statusText.Text = "Copied viewport to clipboard";
+    }
+
+    private void OnPasteClicked(object? sender, EventArgs e)
+    {
+        if (Clipboard.ContainsFileDropList())
+        {
+            foreach (string? path in Clipboard.GetFileDropList())
+            {
+                if (path is not null)
+                {
+                    _ = OpenPathAsync(path);
+                }
+            }
+            return;
+        }
+        if (Clipboard.ContainsText())
+        {
+            string text = Clipboard.GetText().Trim().Trim('"');
+            if (File.Exists(text))
+            {
+                _ = OpenPathAsync(text);
+                return;
+            }
+        }
+        _statusText.Text = "Clipboard has no DWG/DXF file to paste";
+    }
+
+    private void OnUndoClicked(object? sender, EventArgs e)
+    {
+        _viewport.CommitPendingCameraUndo();
+        if (!_undo.CanUndo)
+        {
+            return;
+        }
+
+        string name = _undo.NextName ?? "action";
+        _applyingUndo = true;
+        try
+        {
+            _undo.TryUndo();
+        }
+        finally
+        {
+            _applyingUndo = false;
+        }
+        _statusText.Text = $"Undid {name}";
+    }
+
+    private void OnRedoClicked(object? sender, EventArgs e)
+    {
+        if (!_undo.CanRedo)
+        {
+            return;
+        }
+
+        string name = _undo.NextRedoName ?? "action";
+        _applyingUndo = true;
+        try
+        {
+            _undo.TryRedo();
+        }
+        finally
+        {
+            _applyingUndo = false;
+        }
+        _statusText.Text = $"Redid {name}";
+    }
+
+    private void RestoreView(ViewCamera2D camera, Vector2 center, float unitsPerPixel)
+    {
+        camera.Restore(center, unitsPerPixel);
+        if (ReferenceEquals(_viewport.Camera, camera))
+        {
+            _viewport.RefreshView();
+        }
+    }
+
+    private void ApplyLayerVisibility(int layerId, bool visible)
+    {
+        _viewport.SetLayerVisible(layerId, visible);
+        if (_workspace.Active is { } tab
+            && (uint)layerId < (uint)tab.LayerVisibility.Length)
+        {
+            tab.LayerVisibility[layerId] = visible;
+        }
+        BindLayers(_workspace.Active);
+    }
+
+    private void OnCameraUndoCommitted(object? sender, CameraUndoEventArgs e)
+    {
+        ViewCamera2D camera = e.Camera;
+        Vector2 center = e.PreviousCenter;
+        float unitsPerPixel = e.PreviousUnitsPerPixel;
+        Vector2 afterCenter = camera.Center;
+        float afterScale = camera.UnitsPerPixel;
+        Record(
+            "View",
+            () => RestoreView(camera, center, unitsPerPixel),
+            () => RestoreView(camera, afterCenter, afterScale));
+    }
+
+    private void OnGridChanged(object? sender, EventArgs e)
+    {
+        bool next = _ribbon.GridButton.Checked;
+        bool previous = _viewport.GridVisible;
+        _viewport.GridVisible = next;
+        if (previous == next)
+        {
+            return;
+        }
+        Record(
+            "Grid",
+            () =>
+            {
+                _viewport.GridVisible = previous;
+                _ribbon.GridButton.Checked = previous;
+            },
+            () =>
+            {
+                _viewport.GridVisible = next;
+                _ribbon.GridButton.Checked = next;
+            });
+    }
+
+    private void Record(string name, Action undo, Action redo)
+    {
+        if (_applyingUndo)
+        {
+            return;
+        }
+        _undo.Push(new DelegateUndoAction(name, undo, redo));
+    }
+
+    private void OnZoomWindowChanged(object? sender, EventArgs e)
+    {
+        if (_ribbon.ZoomWindowButton.Checked)
+        {
+            _viewport.BeginZoomWindow();
+            _statusText.Text = "Zoom Window — drag a rectangle on the canvas, Esc or right-click to cancel";
+            return;
+        }
+        if (_viewport.ZoomWindowArmed)
+        {
+            _viewport.CancelZoomWindow();
+        }
     }
 
     private void SetLoading(bool loading)
@@ -324,9 +620,14 @@ public sealed class MainForm : Form
         }
         bool busy = _loadsInFlight > 0;
         _progress.Visible = busy;
-        if (!busy)
+        if (busy)
+        {
+            TaskbarHighlight.SetProgress(this, _progress.Value);
+        }
+        else
         {
             _progress.Value = 0;
+            TaskbarHighlight.Clear(this);
         }
     }
 
@@ -335,6 +636,21 @@ public sealed class MainForm : Form
         if (e.Control && e.KeyCode == Keys.O)
         {
             OnOpenClicked(this, EventArgs.Empty);
+            e.Handled = true;
+        }
+        else if (e.Control && e.KeyCode == Keys.S)
+        {
+            OnSaveClicked(this, EventArgs.Empty);
+            e.Handled = true;
+        }
+        else if (e.Control && e.KeyCode == Keys.C)
+        {
+            OnCopyClicked(this, EventArgs.Empty);
+            e.Handled = true;
+        }
+        else if (e.Control && e.KeyCode == Keys.V)
+        {
+            OnPasteClicked(this, EventArgs.Empty);
             e.Handled = true;
         }
         else if (e.Control && e.KeyCode == Keys.W)
@@ -354,6 +670,24 @@ public sealed class MainForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (keyData == (Keys.Control | Keys.Z))
+        {
+            if (IsTextEditing(ActiveControl))
+            {
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+            OnUndoClicked(this, EventArgs.Empty);
+            return true;
+        }
+        if (keyData is (Keys.Control | Keys.Y) or (Keys.Control | Keys.Shift | Keys.Z))
+        {
+            if (IsTextEditing(ActiveControl))
+            {
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+            OnRedoClicked(this, EventArgs.Empty);
+            return true;
+        }
         if (keyData is (Keys.Control | Keys.Tab) or (Keys.Control | Keys.Shift | Keys.Tab))
         {
             int delta = keyData.HasFlag(Keys.Shift) ? -1 : 1;
@@ -365,6 +699,9 @@ public sealed class MainForm : Form
         }
         return base.ProcessCmdKey(ref msg, keyData);
     }
+
+    private static bool IsTextEditing(Control? control) =>
+        control is TextBoxBase;
 
     private void OnDragEnter(object? sender, DragEventArgs e)
     {
@@ -396,22 +733,6 @@ public sealed class MainForm : Form
         }
     }
 
-    private static ToolStripButton CreateToolbarButton(
-        string text,
-        EventHandler onClick)
-    {
-        var button = new ToolStripButton(text)
-        {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
-            AutoSize = true,
-            Margin = new Padding(3),
-            Padding = new Padding(10, 4, 10, 4),
-            ForeColor = Color.WhiteSmoke,
-        };
-        button.Click += onClick;
-        return button;
-    }
-
     private static string FormatLoadError(Exception exception)
     {
         Exception current = exception is AggregateException aggregate
@@ -420,27 +741,5 @@ public sealed class MainForm : Form
         return string.IsNullOrWhiteSpace(current.InnerException?.Message)
             ? current.Message
             : $"{current.Message}{Environment.NewLine}{Environment.NewLine}{current.InnerException.Message}";
-    }
-
-    private sealed class DarkToolStripRenderer : ToolStripProfessionalRenderer
-    {
-        public DarkToolStripRenderer()
-            : base(new DarkColorTable())
-        {
-        }
-    }
-
-    private sealed class DarkColorTable : ProfessionalColorTable
-    {
-        public override Color ToolStripGradientBegin => Color.FromArgb(42, 45, 49);
-        public override Color ToolStripGradientMiddle => Color.FromArgb(42, 45, 49);
-        public override Color ToolStripGradientEnd => Color.FromArgb(42, 45, 49);
-        public override Color ButtonSelectedHighlight => Color.FromArgb(65, 72, 80);
-        public override Color ButtonSelectedGradientBegin => Color.FromArgb(65, 72, 80);
-        public override Color ButtonSelectedGradientEnd => Color.FromArgb(65, 72, 80);
-        public override Color ButtonCheckedGradientBegin => Color.FromArgb(0, 120, 215);
-        public override Color ButtonCheckedGradientEnd => Color.FromArgb(0, 100, 190);
-        public override Color SeparatorDark => Color.FromArgb(75, 78, 82);
-        public override Color SeparatorLight => Color.FromArgb(75, 78, 82);
     }
 }

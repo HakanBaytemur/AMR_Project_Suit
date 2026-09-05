@@ -40,28 +40,6 @@ internal sealed class LayerPropertiesForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        TryEnableDarkTitleBar();
+        DarkTitleBar.Apply(this);
     }
-
-    private void TryEnableDarkTitleBar()
-    {
-        try
-        {
-            int useDark = 1;
-            _ = DwmSetWindowAttribute(Handle, 20, ref useDark, sizeof(int));
-        }
-        catch (DllNotFoundException)
-        {
-        }
-        catch (EntryPointNotFoundException)
-        {
-        }
-    }
-
-    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
-    private static extern int DwmSetWindowAttribute(
-        IntPtr hwnd,
-        int attribute,
-        ref int attributeValue,
-        int attributeSize);
 }

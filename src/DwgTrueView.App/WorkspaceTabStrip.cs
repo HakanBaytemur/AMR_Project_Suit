@@ -52,6 +52,7 @@ internal sealed class WorkspaceTabStrip : Panel
             true);
         _animator.Tick += (_, _) => TickHover();
         _animator.Start();
+        _ = CadToolTip.Attach(this, HitCommandTip);
     }
 
     public event Action<Guid>? TabSelected;
@@ -350,6 +351,46 @@ internal sealed class WorkspaceTabStrip : Panel
         _scroll = Math.Clamp(_scroll, 0, maxScroll);
         Rectangle clip = new(tabsLeft, Height - TabHeight, Math.Max(0, tabsRight - tabsLeft), TabHeight);
         return new LayoutMetrics(tabWidth, clip, plus, left, right, overflow, maxScroll);
+    }
+
+    private (CommandTip Tip, Rectangle Anchor)? HitCommandTip(Point local)
+    {
+        if (_dragging)
+        {
+            return null;
+        }
+
+        LayoutMetrics layout = MeasureLayout();
+        if (layout.PlusBounds.Contains(local))
+        {
+            return (
+                new CommandTip("Open File", "Open a DWG or DXF drawing in a new tab.", "Ctrl+O"),
+                layout.PlusBounds);
+        }
+
+        if (layout.Overflow && layout.LeftButton.Contains(local))
+        {
+            return (new CommandTip("Scroll Left", "Show tabs hidden on the left."), layout.LeftButton);
+        }
+
+        if (layout.Overflow && layout.RightButton.Contains(local))
+        {
+            return (new CommandTip("Scroll Right", "Show tabs hidden on the right."), layout.RightButton);
+        }
+
+        int index = HitTab(local, layout, out bool close);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        Rectangle tab = TabBounds(index, layout);
+        if (close)
+        {
+            return (new CommandTip("Close Tab", "Close this drawing tab.", "Ctrl+W"), CloseBounds(tab));
+        }
+
+        return (new CommandTip(_tabs[index].Title, "Activate this drawing tab."), tab);
     }
 
     private Rectangle TabBounds(int index, LayoutMetrics layout)

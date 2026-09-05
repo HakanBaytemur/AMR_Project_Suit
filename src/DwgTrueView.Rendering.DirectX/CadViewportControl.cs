@@ -19,6 +19,16 @@ public sealed class WorldCursorEventArgs(Vector2 world) : EventArgs
     public Vector2 World { get; } = world;
 }
 
+public sealed class CameraUndoEventArgs(
+    ViewCamera2D camera,
+    Vector2 previousCenter,
+    float previousUnitsPerPixel) : EventArgs
+{
+    public ViewCamera2D Camera { get; } = camera;
+    public Vector2 PreviousCenter { get; } = previousCenter;
+    public float PreviousUnitsPerPixel { get; } = previousUnitsPerPixel;
+}
+
 /// <summary>
 /// A display-only Direct3D 11 CAD viewport. CAD entities occupy one immutable
 /// GPU line-list vertex buffer; layer toggles select draw ranges without
@@ -80,11 +90,25 @@ public sealed class CadViewportControl : Control
     private bool _gridDirty = true;
     private bool _panning;
     private Point _lastMouse;
+    private Vector2 _panCenter;
+    private float _panUnitsPerPixel;
+    private bool _didPan;
+    private readonly System.Windows.Forms.Timer _wheelUndoTimer;
+    private Vector2 _wheelCenter;
+    private float _wheelUnitsPerPixel;
+    private bool _wheelUndoArmed;
     private int _gridVertexCount;
     private int _accentVertexStart;
     private int _accentVertexCount;
     private bool _disposed;
     private bool _gridVisible = true;
+    private bool _zoomWindowArmed;
+    private bool _zoomDragging;
+    private Point _zoomStart;
+    private Point _zoomCurrent;
+    private Buffer? _zoomBuffer;
+    private readonly CadVertex[] _zoomVertices = new CadVertex[8];
+    private static readonly uint ZoomWindowColor = CadVertex.FromArgb(unchecked((int)0xFF33D6FF));
 
     public CadViewportControl()
     {
@@ -106,6 +130,8 @@ public sealed class CadViewportControl : Control
             }
         };
         _renderTimer.Start();
+        _wheelUndoTimer = new System.Windows.Forms.Timer { Interval = 400 };
+        _wheelUndoTimer.Tick += (_, _) => FlushWheelUndo();
     }
 
     public ViewCamera2D Camera { get; private set; } = new();
@@ -128,6 +154,10 @@ public sealed class CadViewportControl : Control
 
     public event EventHandler<WorldCursorEventArgs>? WorldCursorChanged;
     public event Action<Exception>? RenderFailed;
+    public event Action<bool>? ZoomWindowArmedChanged;
+    public event EventHandler<CameraUndoEventArgs>? CameraUndoCommitted;
+
+    public bool ZoomWindowArmed => _zoomWindowArmed;
 
     public void LoadDrawing(PackedCadDrawing? drawing)
     {
@@ -154,13 +184,14 @@ public sealed class CadViewportControl : Control
     {
         ArgumentNullException.ThrowIfNull(camera);
         ArgumentNullException.ThrowIfNull(layerVisibility);
+        FlushWheelUndo();
         Camera = camera;
         _drawing = drawing;
         _layerVisibility = layerVisibility;
         UploadCadBuffer();
         if (fitExtents)
         {
-            ZoomExtents();
+            ZoomExtents(recordUndo: false);
             return;
         }
         _gridDirty = true;
@@ -181,8 +212,11 @@ public sealed class CadViewportControl : Control
         (uint)layerId < (uint)_layerVisibility.Length
         && _layerVisibility[layerId];
 
-    public void ZoomExtents()
+    public void ZoomExtents(bool recordUndo = true)
     {
+        FlushWheelUndo();
+        Vector2 center = Camera.Center;
+        float unitsPerPixel = Camera.UnitsPerPixel;
         if (_drawing is not null)
         {
             Camera.Fit(
@@ -191,6 +225,43 @@ public sealed class CadViewportControl : Control
         }
         _gridDirty = true;
         RequestFrame();
+        if (recordUndo)
+        {
+            CommitCameraUndo(center, unitsPerPixel);
+        }
+    }
+
+    public void RefreshView()
+    {
+        _gridDirty = true;
+        RequestFrame();
+    }
+
+    public void CommitPendingCameraUndo() => FlushWheelUndo();
+
+    public void BeginZoomWindow()
+    {
+        _zoomWindowArmed = true;
+        Cursor = Cursors.Cross;
+        ZoomWindowArmedChanged?.Invoke(true);
+        RequestFrame();
+    }
+
+    public void CancelZoomWindow()
+    {
+        bool wasArmed = _zoomWindowArmed || _zoomDragging;
+        _zoomWindowArmed = false;
+        _zoomDragging = false;
+        if (Capture)
+        {
+            Capture = false;
+        }
+        Cursor = Cursors.Cross;
+        RequestFrame();
+        if (wasArmed)
+        {
+            ZoomWindowArmedChanged?.Invoke(false);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -245,9 +316,27 @@ public sealed class CadViewportControl : Control
     {
         base.OnMouseDown(e);
         Focus();
+        if (e.Button == MouseButtons.Right && (_zoomWindowArmed || _zoomDragging))
+        {
+            CancelZoomWindow();
+            return;
+        }
+        if (e.Button == MouseButtons.Left && _zoomWindowArmed)
+        {
+            _zoomDragging = true;
+            _zoomStart = e.Location;
+            _zoomCurrent = e.Location;
+            Capture = true;
+            RequestFrame();
+            return;
+        }
         if (e.Button == MouseButtons.Middle)
         {
+            FlushWheelUndo();
             _panning = true;
+            _didPan = false;
+            _panCenter = Camera.Center;
+            _panUnitsPerPixel = Camera.UnitsPerPixel;
             _lastMouse = e.Location;
             Capture = true;
             Cursor = Cursors.SizeAll;
@@ -257,22 +346,41 @@ public sealed class CadViewportControl : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if (e.Button == MouseButtons.Left && _zoomDragging)
+        {
+            Point end = e.Location;
+            _zoomDragging = false;
+            Capture = false;
+            ApplyZoomWindow(_zoomStart, end);
+            CancelZoomWindow();
+            return;
+        }
         if (e.Button == MouseButtons.Middle)
         {
             _panning = false;
             Capture = false;
             Cursor = Cursors.Cross;
+            if (_didPan)
+            {
+                CommitCameraUndo(_panCenter, _panUnitsPerPixel);
+            }
         }
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (_panning)
+        if (_zoomDragging)
+        {
+            _zoomCurrent = e.Location;
+            RequestFrame();
+        }
+        else if (_panning)
         {
             Point delta = new(e.X - _lastMouse.X, e.Y - _lastMouse.Y);
             _lastMouse = e.Location;
             Camera.PanPixels(new Vector2(delta.X, delta.Y));
+            _didPan = true;
             _gridDirty = true;
             RequestFrame();
         }
@@ -289,6 +397,12 @@ public sealed class CadViewportControl : Control
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
+        if (!_wheelUndoArmed)
+        {
+            _wheelCenter = Camera.Center;
+            _wheelUnitsPerPixel = Camera.UnitsPerPixel;
+            _wheelUndoArmed = true;
+        }
         float factor = MathF.Pow(0.85f, e.Delta / 120f);
         Camera.ZoomAt(
             new Vector2(e.X, e.Y),
@@ -296,6 +410,8 @@ public sealed class CadViewportControl : Control
             factor);
         _gridDirty = true;
         RequestFrame();
+        _wheelUndoTimer.Stop();
+        _wheelUndoTimer.Start();
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -316,6 +432,11 @@ public sealed class CadViewportControl : Control
             ZoomExtents();
             return true;
         }
+        if (keyData is Keys.Escape && (_zoomWindowArmed || _zoomDragging))
+        {
+            CancelZoomWindow();
+            return true;
+        }
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
@@ -324,6 +445,8 @@ public sealed class CadViewportControl : Control
         if (!_disposed && disposing)
         {
             _disposed = true;
+            _wheelUndoTimer.Stop();
+            _wheelUndoTimer.Dispose();
             _renderTimer.Stop();
             _renderTimer.Dispose();
             DisposeDeviceResources();
@@ -384,6 +507,15 @@ public sealed class CadViewportControl : Control
             _device,
             new BufferDescription(
                 MaximumGridVertices * CadVertex.SizeInBytes,
+                ResourceUsage.Dynamic,
+                BindFlags.VertexBuffer,
+                CpuAccessFlags.Write,
+                ResourceOptionFlags.None,
+                0));
+        _zoomBuffer = new Buffer(
+            _device,
+            new BufferDescription(
+                _zoomVertices.Length * CadVertex.SizeInBytes,
                 ResourceUsage.Dynamic,
                 BindFlags.VertexBuffer,
                 CpuAccessFlags.Write,
@@ -608,6 +740,10 @@ public sealed class CadViewportControl : Control
             {
                 DrawOverlayRange(_accentVertexStart, _accentVertexCount);
             }
+            if (_zoomDragging)
+            {
+                DrawZoomWindow();
+            }
             _swapChain.Present(1, PresentFlags.None);
         }
         catch (SharpDXException exception)
@@ -631,6 +767,59 @@ public sealed class CadViewportControl : Control
                 CadVertex.SizeInBytes,
                 0));
         _context.Draw(vertexCount, startVertex);
+    }
+
+    private void DrawZoomWindow()
+    {
+        if (_context is null || _zoomBuffer is null)
+        {
+            return;
+        }
+        Vector2 viewport = new(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
+        Vector2 a = Camera.ScreenToWorld(new Vector2(_zoomStart.X, _zoomStart.Y), viewport);
+        Vector2 b = Camera.ScreenToWorld(new Vector2(_zoomCurrent.X, _zoomCurrent.Y), viewport);
+        float left = MathF.Min(a.X, b.X);
+        float right = MathF.Max(a.X, b.X);
+        float bottom = MathF.Min(a.Y, b.Y);
+        float top = MathF.Max(a.Y, b.Y);
+        _zoomVertices[0] = new CadVertex(left, bottom, ZoomWindowColor);
+        _zoomVertices[1] = new CadVertex(right, bottom, ZoomWindowColor);
+        _zoomVertices[2] = new CadVertex(right, bottom, ZoomWindowColor);
+        _zoomVertices[3] = new CadVertex(right, top, ZoomWindowColor);
+        _zoomVertices[4] = new CadVertex(right, top, ZoomWindowColor);
+        _zoomVertices[5] = new CadVertex(left, top, ZoomWindowColor);
+        _zoomVertices[6] = new CadVertex(left, top, ZoomWindowColor);
+        _zoomVertices[7] = new CadVertex(left, bottom, ZoomWindowColor);
+        DataBox box = _context.MapSubresource(
+            _zoomBuffer,
+            0,
+            MapMode.WriteDiscard,
+            SharpDX.Direct3D11.MapFlags.None);
+        Utilities.Write(box.DataPointer, _zoomVertices, 0, _zoomVertices.Length);
+        _context.UnmapSubresource(_zoomBuffer, 0);
+        _context.InputAssembler.PrimitiveTopology = PrimitiveTopology.LineList;
+        _context.InputAssembler.SetVertexBuffers(
+            0,
+            new VertexBufferBinding(_zoomBuffer, CadVertex.SizeInBytes, 0));
+        _context.Draw(_zoomVertices.Length, 0);
+    }
+
+    private void ApplyZoomWindow(Point start, Point end)
+    {
+        if (Math.Abs(end.X - start.X) < 4 || Math.Abs(end.Y - start.Y) < 4)
+        {
+            return;
+        }
+        Vector2 center = Camera.Center;
+        float unitsPerPixel = Camera.UnitsPerPixel;
+        Camera.FitScreenRect(
+            new Vector2(start.X, start.Y),
+            new Vector2(end.X, end.Y),
+            new Vector2(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height)),
+            margin: 0f);
+        _gridDirty = true;
+        RequestFrame();
+        CommitCameraUndo(center, unitsPerPixel);
     }
 
     private void UpdateGridBuffer()
@@ -683,6 +872,28 @@ public sealed class CadViewportControl : Control
 
     private void RequestFrame() => _dirty = true;
 
+    private void FlushWheelUndo()
+    {
+        _wheelUndoTimer.Stop();
+        if (!_wheelUndoArmed)
+        {
+            return;
+        }
+        _wheelUndoArmed = false;
+        CommitCameraUndo(_wheelCenter, _wheelUnitsPerPixel);
+    }
+
+    private void CommitCameraUndo(Vector2 previousCenter, float previousUnitsPerPixel)
+    {
+        if (Camera.Matches(previousCenter, previousUnitsPerPixel))
+        {
+            return;
+        }
+        CameraUndoCommitted?.Invoke(
+            this,
+            new CameraUndoEventArgs(Camera, previousCenter, previousUnitsPerPixel));
+    }
+
     private void DisposeDeviceResources()
     {
         _context?.ClearState();
@@ -690,6 +901,7 @@ public sealed class CadViewportControl : Control
         _cadBuffer?.Dispose();
         _fillBuffer?.Dispose();
         _gridBuffer?.Dispose();
+        _zoomBuffer?.Dispose();
         _cameraBuffer?.Dispose();
         _inputLayout?.Dispose();
         _rasterizer?.Dispose();
@@ -702,6 +914,7 @@ public sealed class CadViewportControl : Control
         _cadBuffer = null;
         _fillBuffer = null;
         _gridBuffer = null;
+        _zoomBuffer = null;
         _cameraBuffer = null;
         _inputLayout = null;
         _rasterizer = null;

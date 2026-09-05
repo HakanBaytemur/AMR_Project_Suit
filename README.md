@@ -1,4 +1,4 @@
-# DWG TrueView Lite
+# IntraLayout Studio
 
 A pure C#/.NET 8, read-only DWG/DXF viewer optimized for low memory use and
 smooth CAD navigation. It has no drawing or editing features.

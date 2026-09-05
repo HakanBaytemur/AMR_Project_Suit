@@ -88,6 +88,25 @@ public sealed class WorkspaceTabCollectionTests
         Assert.False(workspace.Move(first.Id, 2));
     }
 
+    [Fact]
+    public void InsertRestoresAClosedTabAtItsPreviousIndex()
+    {
+        var workspace = new WorkspaceTabCollection();
+        DrawingWorkspace first = workspace.Add(Drawing("a.dxf"));
+        DrawingWorkspace middle = workspace.Add(Drawing("b.dxf"));
+        DrawingWorkspace last = workspace.Add(Drawing("c.dxf"));
+        int index = workspace.IndexOf(middle.Id);
+
+        Assert.True(workspace.Close(middle.Id));
+        workspace.Insert(middle, index, activate: true);
+
+        Assert.Equal(3, workspace.Count);
+        Assert.Same(middle, workspace.Active);
+        Assert.Equal(index, workspace.IndexOf(middle.Id));
+        Assert.Same(first, workspace.Find(first.Id));
+        Assert.Same(last, workspace.Find(last.Id));
+    }
+
     private static PackedCadDrawing Drawing(string fileName, int layerCount = 1)
     {
         var layers = Enumerable.Range(0, layerCount)

@@ -74,4 +74,30 @@ public sealed class ViewCamera2D
             MinimumUnitsPerPixel,
             MaximumUnitsPerPixel);
     }
+
+    public void Restore(Vector2 center, float unitsPerPixel)
+    {
+        Center = center;
+        UnitsPerPixel = Math.Clamp(
+            float.IsFinite(unitsPerPixel) ? unitsPerPixel : 1,
+            MinimumUnitsPerPixel,
+            MaximumUnitsPerPixel);
+    }
+
+    public bool Matches(Vector2 center, float unitsPerPixel) =>
+        Center == center && UnitsPerPixel == unitsPerPixel;
+
+    public void FitScreenRect(
+        Vector2 screenA,
+        Vector2 screenB,
+        Vector2 viewportSize,
+        float margin = 0f)
+    {
+        Vector2 worldA = ScreenToWorld(screenA, viewportSize);
+        Vector2 worldB = ScreenToWorld(screenB, viewportSize);
+        Fit(
+            new CadBounds2(Vector2.Min(worldA, worldB), Vector2.Max(worldA, worldB)),
+            viewportSize,
+            margin);
+    }
 }

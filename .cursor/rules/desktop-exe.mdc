@@ -1,5 +1,5 @@
 ---
-description: Republish the Desktop V2 EXE after program changes
+description: Republish the Desktop EXE after program changes
 alwaysApply: true
 ---
 
@@ -9,9 +9,8 @@ When you change the viewer (CAD ingest, rendering, UI, or app shell), finish by 
 
 ```powershell
 dotnet publish src/DwgTrueView.App/DwgTrueView.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o artifacts/publish/dwg-trueview-lite-v2
-Copy-Item -LiteralPath artifacts/publish/dwg-trueview-lite-v2/DwgTrueView.App.exe -Destination "$env:USERPROFILE\Desktop\DWG TrueView Lite V2.exe" -Force
+Copy-Item -LiteralPath artifacts/publish/dwg-trueview-lite-v2/DwgTrueView.App.exe -Destination "$env:USERPROFILE\Desktop\IntraLayout Studio.exe" -Force
 ```
 
-- Use the versioned Desktop name (`DWG TrueView Lite V2.exe`). Do not overwrite `DWG TrueView Lite.exe` (v1).
-- If the product version changes later, keep that version in the Desktop file name (`V3`, `V4`, …).
+- Use the Desktop name `IntraLayout Studio.exe`. Do not overwrite `DWG TrueView Lite.exe` (v1).
 - Skip only for docs-only, test-only, or rule-only edits that cannot affect the running app.

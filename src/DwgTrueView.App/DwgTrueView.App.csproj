@@ -12,8 +12,42 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <DesktopExeName>DWG TrueView Lite V2.exe</DesktopExeName>
+    <DesktopExeName>IntraLayout Studio.exe</DesktopExeName>
+    <AssemblyTitle>IntraLayout Studio</AssemblyTitle>
+    <Product>IntraLayout Studio</Product>
+    <ApplicationIcon>..\..\Assets\Branding\App.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Svg" Version="3.4.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\Assets\Icons\*.png">
+      <LogicalName>IntraLayout.Icons.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\Assets\Icons\*.svg">
+      <LogicalName>IntraLayout.Icons.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\Assets\Branding\only_logo.png">
+      <LogicalName>IntraLayout.Branding.only_logo.png</LogicalName>
+    </EmbeddedResource>
+    <Content Include="..\..\Assets\Icons\*.png">
+      <Link>Assets\Icons\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\..\Assets\Icons\*.svg">
+      <Link>Assets\Icons\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\..\Assets\Branding\only_logo.png">
+      <Link>Assets\Branding\only_logo.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 
   <Target Name="CopyPublishedExeToDesktop" AfterTargets="Publish" Condition="'$(OS)' == 'Windows_NT'">
     <PropertyGroup>

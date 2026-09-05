@@ -108,6 +108,29 @@ public sealed class WorkspaceTabCollection
         return true;
     }
 
+    public void Insert(DrawingWorkspace tab, int index, bool activate)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        if (Find(tab.Id) is not null)
+        {
+            if (activate)
+            {
+                Activate(tab.Id);
+            }
+            return;
+        }
+
+        index = Math.Clamp(index, 0, _tabs.Count);
+        _tabs.Insert(index, tab);
+        if (activate || Active is null)
+        {
+            Active = tab;
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    public int IndexOf(Guid id) => _tabs.FindIndex(tab => tab.Id == id);
+
     public bool ActivateRelative(int delta)
     {
         if (Active is null || _tabs.Count < 2)
