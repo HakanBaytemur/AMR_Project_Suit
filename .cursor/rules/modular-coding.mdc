@@ -1,0 +1,26 @@
+---
+description: Modular, single-responsibility new code
+alwaysApply: true
+---
+
+# Modular new code
+
+Design all **new** types with one job and clean boundaries. Do not grow `MainForm`, `RibbonMenu`, or other large files into monoliths.
+
+## Separation
+
+- Put business logic, commands, and services in their own files.
+- Keep UI wiring thin: the form or control calls a service; it does not own the algorithm.
+- Follow MVVM-style separation (model / logic / view) even in WinForms. Do not convert the existing app to WPF unless asked.
+
+## How to add a feature
+
+- New file or small class per concern (e.g. `CadShortcuts.cs`, `CadToolTip.cs`, `CaptionFrame.cs`).
+- Prefer a dedicated service or helper over another 100 lines in an existing code-behind.
+- Reuse existing helpers (`AppIcons`, `CadToolTip`, `CaptionFrame`) instead of copying their logic.
+
+## Single responsibility
+
+- One class, one reason to change.
+- New code must integrate without rewriting or polluting working chrome, shortcuts, or tooltips.
+- If a change needs shared state, add a small service; do not dump fields onto `MainForm`.

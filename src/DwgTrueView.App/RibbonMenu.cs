@@ -11,12 +11,11 @@ internal sealed class RibbonMenu : Panel
     private static readonly Color BorderColor = Color.FromArgb(0x22, 0x29, 0x33);
 
     private readonly RibbonTabBar _tabBar;
-    private readonly Control _mainToolbar;
-    private readonly List<ToolStrip> _commandStrips = [];
+    private readonly RibbonCommandBar _mainToolbar;
 
     public RibbonMenu()
     {
-        Height = 114;
+        Height = 103;
         BackColor = CommandBarColor;
         OpenButton = CreateCommand(
             "Open File",
@@ -120,7 +119,8 @@ internal sealed class RibbonMenu : Panel
         ZoomWindowButton.CheckOnClick = true;
 
         _tabBar = new RibbonTabBar(CreateQuickAccess(OpenButton, SaveButton, RecentButton));
-        _mainToolbar = CreateGroupedToolbar(
+        _mainToolbar = new RibbonCommandBar();
+        _mainToolbar.AddGroups(
             ("Analysis Elements",
             [
                 CreateCommand(
@@ -251,7 +251,7 @@ internal sealed class RibbonMenu : Panel
             ]));
 
         _tabBar.Dock = DockStyle.Top;
-        _tabBar.Height = 43;
+        _tabBar.Height = 32;
         _tabBar.UndoClicked += (_, _) => UndoClicked?.Invoke(this, EventArgs.Empty);
         _tabBar.RedoClicked += (_, _) => RedoClicked?.Invoke(this, EventArgs.Empty);
         _mainToolbar.Dock = DockStyle.Fill;
@@ -280,20 +280,7 @@ internal sealed class RibbonMenu : Panel
     public ToolStripButton TrimButton { get; }
     public ToolStripButton FilletButton { get; }
 
-    public ToolStripButton? FindCommand(string name)
-    {
-        foreach (ToolStrip strip in _commandStrips)
-        {
-            ToolStripButton? match = strip.Items.OfType<ToolStripButton>()
-                .FirstOrDefault(item => string.Equals(item.Text, name, StringComparison.OrdinalIgnoreCase));
-            if (match is not null)
-            {
-                return match;
-            }
-        }
-
-        return null;
-    }
+    public ToolStripButton? FindCommand(string name) => _mainToolbar.FindCommand(name);
 
     public event EventHandler? UndoClicked;
     public event EventHandler? RedoClicked;
@@ -366,7 +353,7 @@ internal sealed class RibbonMenu : Panel
             Renderer = new DarkToolStripRenderer(TabBarColor),
             Padding = new Padding(0, 1, 0, 1),
             AutoSize = true,
-            ImageScalingSize = new Size(20, 20),
+            ImageScalingSize = new Size(18, 18),
             ShowItemToolTips = false,
             CanOverflow = false,
             Dock = DockStyle.None,
@@ -377,115 +364,6 @@ internal sealed class RibbonMenu : Panel
         }
         _ = CadToolTip.Attach(strip);
         return strip;
-    }
-
-    private Control CreateGroupedToolbar(params (string Title, ToolStripItem[] Items)[] groups)
-    {
-        var host = new Panel
-        {
-            Height = 70,
-            BackColor = CommandBarColor,
-            Padding = new Padding(2, 0, 2, 0),
-        };
-        var flow = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            BackColor = CommandBarColor,
-            AutoScroll = true,
-            AutoScrollMinSize = new Size(0, 0),
-            Padding = Padding.Empty,
-            Margin = Padding.Empty,
-        };
-        for (int index = 0; index < groups.Length; index++)
-        {
-            flow.Controls.Add(CreateCommandGroup(
-                groups[index].Title,
-                groups[index].Items,
-                showDivider: index < groups.Length - 1));
-        }
-
-        host.Controls.Add(flow);
-        return host;
-    }
-
-    private Control CreateCommandGroup(string title, ToolStripItem[] items, bool showDivider)
-    {
-        var strip = new ToolStrip
-        {
-            GripStyle = ToolStripGripStyle.Hidden,
-            BackColor = CommandBarColor,
-            ForeColor = Color.WhiteSmoke,
-            Renderer = new DarkToolStripRenderer(),
-            Padding = new Padding(4, 4, 4, 0),
-            AutoSize = true,
-            Dock = DockStyle.None,
-            ImageScalingSize = new Size(24, 24),
-            ShowItemToolTips = false,
-            CanOverflow = false,
-        };
-        if (items.Length > 0)
-        {
-            strip.Items.AddRange(items);
-        }
-
-        foreach (ToolStripItem item in strip.Items)
-        {
-            if (item is not ToolStripButton button)
-            {
-                continue;
-            }
-
-            button.DisplayStyle = ToolStripItemDisplayStyle.Image;
-            button.AutoToolTip = false;
-            button.Margin = new Padding(1, 2, 1, 2);
-            button.Padding = new Padding(4);
-        }
-
-        _ = CadToolTip.Attach(strip);
-        _commandStrips.Add(strip);
-
-        using var labelFont = new Font("Segoe UI", 9f);
-        int labelWidth = TextRenderer.MeasureText(title, labelFont).Width + 16;
-        int stripWidth = strip.GetPreferredSize(Size.Empty).Width;
-        int width = Math.Max(labelWidth, stripWidth) + (showDivider ? 7 : 4);
-
-        var group = new Panel
-        {
-            Width = width,
-            Height = 68,
-            BackColor = CommandBarColor,
-            Margin = new Padding(0),
-            Padding = Padding.Empty,
-        };
-        var label = new Label
-        {
-            Text = title,
-            Dock = DockStyle.Bottom,
-            Height = 18,
-            TextAlign = ContentAlignment.TopCenter,
-            ForeColor = Color.FromArgb(220, 222, 228),
-            Font = new Font("Segoe UI", 9f),
-            BackColor = CommandBarColor,
-        };
-        strip.Location = new Point(2, 1);
-        strip.Width = width - (showDivider ? 8 : 4);
-        strip.Height = 46;
-        group.Controls.Add(strip);
-        group.Controls.Add(label);
-        if (showDivider)
-        {
-            group.Controls.Add(new Panel
-            {
-                Dock = DockStyle.Right,
-                Width = 1,
-                BackColor = BorderColor,
-                Margin = new Padding(0),
-            });
-        }
-
-        return group;
     }
 
     private static ToolStripButton CreateCommand(
@@ -559,8 +437,8 @@ internal sealed class RibbonMenu : Panel
         private readonly Image? _redoIcon = AppIcons.Load("Redo.svg");
         private readonly Image? _settingsIcon = AppIcons.Load("Settings.svg");
         private readonly Font _windowGlyphs = new("Segoe MDL2 Assets", 10f);
-        private const int WindowButtonWidth = 46;
-        private const int TopInset = 7;
+        private const int WindowButtonWidth = 40;
+        private const int TopInset = 2;
         private Rectangle _logoBounds;
         private Rectangle _undoBounds;
         private Rectangle _redoBounds;
@@ -708,22 +586,22 @@ internal sealed class RibbonMenu : Panel
             graphics.Clear(TabBarColor);
             int contentTop = TopInset;
             int contentHeight = Math.Max(22, Height - TopInset - 1);
-            int x = 8;
+            int x = 2;
             if (_appLogo is not null)
             {
-                int logoHeight = Math.Max(18, contentHeight - 4);
+                int logoHeight = Math.Max(16, contentHeight - 2);
                 int logoWidth = Math.Max(
-                    18,
+                    16,
                     (int)Math.Round(logoHeight * (_appLogo.Width / (double)_appLogo.Height)));
                 _logoBounds = new Rectangle(
-                    8,
+                    2,
                     contentTop + (contentHeight - logoHeight) / 2,
                     logoWidth,
                     logoHeight);
                 graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                 graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
                 graphics.DrawImage(_appLogo, _logoBounds);
-                x = _logoBounds.Right + 8;
+                x = _logoBounds.Right + 6;
             }
             else
             {

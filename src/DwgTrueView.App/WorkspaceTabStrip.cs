@@ -12,10 +12,10 @@ internal sealed class WorkspaceTabStrip : Panel
     private const int MinTabWidth = 108;
     private const int MaxTabWidth = 228;
     private const int TabGap = 5;
-    private const int TabHeight = 32;
-    private const int PlusSize = 28;
-    private const int ScrollButton = 22;
-    private const int CornerRadius = 10;
+    private const int TabHeight = 26;
+    private const int PlusSize = 22;
+    private const int ScrollButton = 18;
+    private const int CornerRadius = 8;
     private static readonly Color StripColor = Color.FromArgb(0x22, 0x29, 0x33);
     private static readonly Color InactiveColor = Color.FromArgb(36, 38, 42);
     private static readonly Color HoverColor = Color.FromArgb(52, 56, 62);
@@ -38,9 +38,9 @@ internal sealed class WorkspaceTabStrip : Panel
 
     public WorkspaceTabStrip()
     {
-        Height = 40;
+        Height = 32;
         BackColor = StripColor;
-        Padding = new Padding(8, 6, 8, 0);
+        Padding = new Padding(8, 3, 8, 0);
         AllowDrop = true;
         DoubleBuffered = true;
         Font = new Font("Segoe UI", 9f);

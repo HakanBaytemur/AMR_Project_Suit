@@ -55,6 +55,7 @@ internal sealed record CommandTip(
 internal sealed class CadToolTip : IDisposable
 {
     private const int MaxText = 280;
+    private const int ShowDelayMs = 800;
 
     private static readonly Color TipFill = Color.FromArgb(248, 248, 248);
     private static readonly Color TipBorder = Color.FromArgb(168, 168, 168);
@@ -68,10 +69,15 @@ internal sealed class CadToolTip : IDisposable
     private readonly Func<Point, HoverTarget?>? _hit;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly TipWindow _window;
+    private readonly System.Windows.Forms.Timer _watch;
     private HoverTarget? _current;
     private bool _disposed;
 
-    private readonly record struct HoverTarget(object Key, CommandTip Tip, Rectangle ScreenAnchor);
+    private readonly record struct HoverTarget(
+        object Key,
+        CommandTip Tip,
+        Rectangle ScreenAnchor,
+        bool PlaceBeside);
 
     private CadToolTip(Control host, Func<Point, HoverTarget?>? hit)
     {
@@ -80,9 +86,11 @@ internal sealed class CadToolTip : IDisposable
         _window = new TipWindow();
         _timer = new System.Windows.Forms.Timer
         {
-            Interval = Math.Clamp(SystemInformation.MouseHoverTime, 400, 700),
+            Interval = ShowDelayMs,
         };
         _timer.Tick += OnTick;
+        _watch = new System.Windows.Forms.Timer { Interval = 50 };
+        _watch.Tick += OnWatch;
         host.Disposed += (_, _) => Dispose();
         if (hit is not null)
         {
@@ -114,7 +122,7 @@ internal sealed class CadToolTip : IDisposable
             Point local = strip.PointToClient(Control.MousePosition);
             if (!strip.ClientRectangle.Contains(local))
             {
-                tips.HideTip();
+                tips.Hide();
             }
         };
         return tips;
@@ -134,8 +142,19 @@ internal sealed class CadToolTip : IDisposable
             return new HoverTarget(
                 found.Value.Tip.Title + found.Value.Tip.Shortcut + found.Value.Tip.Description,
                 found.Value.Tip,
-                screen);
+                screen,
+                PlaceBeside: false);
         });
+    }
+
+    public static bool IsPointerOverAnyTip() => TipWindow.IsPointerOverAny();
+
+    public void Hide()
+    {
+        _current = null;
+        _timer.Stop();
+        _watch.Stop();
+        HideTip();
     }
 
     public void Dispose()
@@ -146,8 +165,11 @@ internal sealed class CadToolTip : IDisposable
         }
 
         _disposed = true;
-        HideTip();
+        _timer.Stop();
+        _watch.Stop();
+        _window.Dismiss(immediate: true);
         _timer.Dispose();
+        _watch.Dispose();
         _window.Dispose();
     }
 
@@ -159,26 +181,79 @@ internal sealed class CadToolTip : IDisposable
         }
 
         item.AutoToolTip = false;
-        item.MouseHover += (_, _) =>
-        {
-            CommandTip? tip = CommandTip.FromItem(item);
-            if (tip is null)
-            {
-                return;
-            }
-
-            Rectangle bounds = item.Bounds;
-            tips.ShowTip(new HoverTarget(item, tip, strip.RectangleToScreen(bounds)));
-        };
+        item.MouseEnter += (_, _) => tips.BeginItemTip(strip, item);
         item.MouseLeave += (_, _) =>
         {
             Point screen = Control.MousePosition;
             if (!strip.RectangleToScreen(item.Bounds).Contains(screen))
             {
-                tips.HideTip();
+                tips.CancelItemTip(item);
             }
         };
         item.MouseDown += (_, _) => tips.HideTip();
+        if (item is ToolStripButton button)
+        {
+            button.CheckedChanged += (_, _) =>
+            {
+                if (button.Checked)
+                {
+                    tips.CancelItemTip(button);
+                }
+            };
+        }
+        else if (item is ToolStripMenuItem menu)
+        {
+            menu.CheckedChanged += (_, _) =>
+            {
+                if (menu.Checked)
+                {
+                    tips.CancelItemTip(menu);
+                }
+            };
+        }
+    }
+
+    private void BeginItemTip(ToolStrip strip, ToolStripItem item)
+    {
+        if (IsActive(item))
+        {
+            CancelItemTip(item);
+            return;
+        }
+
+        CommandTip? tip = CommandTip.FromItem(item);
+        if (tip is null)
+        {
+            return;
+        }
+
+        var target = new HoverTarget(
+            item,
+            tip,
+            strip.RectangleToScreen(item.Bounds),
+            PlaceBeside: strip is ToolStripDropDown);
+        if (_current is { } current && Equals(current.Key, target.Key))
+        {
+            return;
+        }
+
+        _current = target;
+        HideTip();
+        _timer.Stop();
+        _timer.Start();
+        _watch.Start();
+    }
+
+    private void CancelItemTip(ToolStripItem item)
+    {
+        if (_current is not { } current || !Equals(current.Key, item))
+        {
+            return;
+        }
+
+        _current = null;
+        _timer.Stop();
+        HideTip();
     }
 
     private void OnHostMouseMove(object? sender, MouseEventArgs e)
@@ -200,6 +275,11 @@ internal sealed class CadToolTip : IDisposable
         if (next is not null)
         {
             _timer.Start();
+            _watch.Start();
+        }
+        else
+        {
+            _watch.Stop();
         }
     }
 
@@ -213,27 +293,84 @@ internal sealed class CadToolTip : IDisposable
 
         _current = null;
         _timer.Stop();
+        _watch.Stop();
         HideTip();
     }
 
     private void OnTick(object? sender, EventArgs e)
     {
         _timer.Stop();
-        if (_current is { } target)
+        if (_current is not { } target || !IsPointerOn(target))
         {
-            ShowTip(target);
+            _current = null;
+            return;
         }
+
+        ShowTip(target);
+    }
+
+    private void OnWatch(object? sender, EventArgs e)
+    {
+        if (_current is not { } target)
+        {
+            if (!_window.IsDisplayed)
+            {
+                _watch.Stop();
+            }
+
+            return;
+        }
+
+        if (IsPointerOn(target) && !(target.Key is ToolStripItem item && IsActive(item)))
+        {
+            return;
+        }
+
+        _current = null;
+        _timer.Stop();
+        HideTip();
+    }
+
+    private bool IsPointerOn(HoverTarget target)
+    {
+        Point pointer = Control.MousePosition;
+        if (target.Key is ToolStripItem item)
+        {
+            ToolStrip? strip = item.GetCurrentParent();
+            return strip is { IsDisposed: false, Visible: true }
+                && item.Available
+                && strip.RectangleToScreen(item.Bounds).Contains(pointer);
+        }
+
+        if (_hit is null || !_host.IsHandleCreated)
+        {
+            return target.ScreenAnchor.Contains(pointer);
+        }
+
+        HoverTarget? next = _hit(_host.PointToClient(pointer));
+        return next is { } found && Equals(found.Key, target.Key);
     }
 
     private void ShowTip(HoverTarget target)
     {
+        if (target.Key is ToolStripItem item && IsActive(item))
+        {
+            return;
+        }
+
         _current = target;
-        _window.Present(target.Tip, target.ScreenAnchor);
+        _window.Present(target.Tip, target.ScreenAnchor, target.PlaceBeside);
+        _watch.Start();
     }
+
+    private static bool IsActive(ToolStripItem item) =>
+        item.Pressed
+        || (item is ToolStripButton button && button.Checked)
+        || (item is ToolStripMenuItem menu && menu.Checked);
 
     private void HideTip()
     {
-        _window.Hide();
+        _window.Dismiss();
     }
 
     private sealed class TipWindow : Form
@@ -242,6 +379,7 @@ internal sealed class CadToolTip : IDisposable
         private readonly Font _shortcutFont = new("Segoe UI Semibold", 8.25f, FontStyle.Bold);
         private readonly Font _bodyFont = new("Segoe UI", 8.25f);
         private readonly Font _footerFont = new("Segoe UI", 8f);
+        private readonly CadToolTipFade _fade;
         private CommandTip _tip = new(string.Empty, string.Empty);
 
         public TipWindow()
@@ -252,6 +390,9 @@ internal sealed class CadToolTip : IDisposable
             TopMost = true;
             BackColor = TipFill;
             DoubleBuffered = true;
+            AllowTransparency = true;
+            Opacity = 0;
+            _fade = new CadToolTipFade(this);
         }
 
         protected override bool ShowWithoutActivation => true;
@@ -267,26 +408,86 @@ internal sealed class CadToolTip : IDisposable
             }
         }
 
-        public void Present(CommandTip tip, Rectangle screenAnchor)
+        public bool IsDisplayed => Visible || _fade.IsRunning;
+
+        public static bool IsPointerOverAny()
+        {
+            Point pointer = Control.MousePosition;
+            foreach (Form form in Application.OpenForms)
+            {
+                if (form is TipWindow tip && tip.Visible && tip.Bounds.Contains(pointer))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public void Present(CommandTip tip, Rectangle screenAnchor, bool placeBeside = false)
         {
             _tip = tip;
             Size size = MeasureTip(tip);
-            int x = screenAnchor.Left;
-            int y = screenAnchor.Bottom + 4;
             Rectangle work = Screen.FromPoint(screenAnchor.Location).WorkingArea;
-            x = Math.Clamp(x, work.Left + 4, Math.Max(work.Left + 4, work.Right - size.Width - 4));
-            if (y + size.Height > work.Bottom)
+            int x;
+            int y;
+            if (placeBeside)
             {
-                y = screenAnchor.Top - size.Height - 2;
+                x = screenAnchor.Right + 8;
+                y = screenAnchor.Top;
+                if (x + size.Width > work.Right - 4)
+                {
+                    x = screenAnchor.Left - size.Width - 8;
+                }
+
+                y = Math.Clamp(y, work.Top + 4, Math.Max(work.Top + 4, work.Bottom - size.Height - 4));
             }
+            else
+            {
+                x = screenAnchor.Left;
+                y = screenAnchor.Bottom + 4;
+                if (y + size.Height > work.Bottom)
+                {
+                    y = screenAnchor.Top - size.Height - 2;
+                }
+            }
+
+            x = Math.Clamp(x, work.Left + 4, Math.Max(work.Left + 4, work.Right - size.Width - 4));
 
             Size = size;
             Location = new Point(x, y);
             Invalidate();
             if (!Visible)
             {
+                Opacity = 0;
                 Show();
             }
+
+            _fade.Play(1);
+        }
+
+        public void Dismiss(bool immediate = false)
+        {
+            if (!Visible && !_fade.IsRunning)
+            {
+                return;
+            }
+
+            if (immediate)
+            {
+                _fade.Snap(0);
+                Hide();
+                return;
+            }
+
+            _fade.Play(0, () =>
+            {
+                if (Opacity <= 0.02)
+                {
+                    Hide();
+                    Opacity = 0;
+                }
+            });
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -366,6 +567,7 @@ internal sealed class CadToolTip : IDisposable
         {
             if (disposing)
             {
+                _fade.Dispose();
                 _titleFont.Dispose();
                 _shortcutFont.Dispose();
                 _bodyFont.Dispose();
